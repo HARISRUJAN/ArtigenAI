@@ -1,0 +1,105 @@
+from pydantic_settings import BaseSettings
+from typing import List
+from pydantic import Field, computed_field, field_validator
+import os
+
+
+class Settings(BaseSettings):
+    """
+    Application settings loaded from environment variables.
+    All sensitive values must be provided via environment variables in production.
+    """
+    
+    # Database
+    # For production, use PostgreSQL: postgresql://user:password@host:port/dbname
+    database_url: str = Field(
+        default="sqlite:///./aigov.db",
+        description="Database connection URL. Use PostgreSQL for production."
+    )
+    
+    # JWT - REQUIRED in production
+    secret_key: str = Field(
+        default="",
+        description="Secret key for JWT token signing. REQUIRED in production. Generate with: openssl rand -hex 32"
+    )
+    algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    access_token_expire_minutes: int = Field(default=30, description="JWT token expiration time in minutes")
+    
+    # LLM Provider Configuration
+    # Groq is used for answer generation (primary) - REQUIRED
+    groq_api_key: str = Field(
+        default="",
+        description="Groq API key for answer generation. REQUIRED. Get from https://console.groq.com/keys"
+    )
+    
+    # OpenAI API key (optional - only needed if using OpenAI as fallback for generation)
+    # Note: Embeddings use Nomic (sentence-transformers) - no API key needed
+    openai_api_key: str = Field(
+        default="",
+        description="OpenAI API key (optional, only for fallback LLM generation). Embeddings use Nomic locally."
+    )
+    
+    # Qdrant Vector Database
+    qdrant_url: str = Field(
+        default="http://localhost:6333",
+        description="Qdrant vector database URL. Use Qdrant Cloud URL for production."
+    )
+    qdrant_api_key: str = Field(
+        default="",
+        description="Qdrant API key (required for Qdrant Cloud, optional for local)"
+    )
+    qdrant_collection_name: str = Field(
+        default="aigov_documents",
+        description="Qdrant collection name for document embeddings"
+    )
+    
+    # CORS - stored as string in .env (CORS_ORIGINS), parsed to list
+    cors_origins_str: str = Field(
+        default="http://localhost:5173,http://localhost:3000",
+        alias="CORS_ORIGINS",
+        description="Comma-separated list of allowed CORS origins"
+    )
+    
+    @computed_field
+    @property
+    def cors_origins(self) -> List[str]:
+        """Parse CORS origins from comma-separated string"""
+        return [origin.strip() for origin in self.cors_origins_str.split(',') if origin.strip()]
+    
+    @field_validator('secret_key')
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        """Validate secret key is set in production"""
+        if not v or v == "":
+            # Only warn in production, allow empty for development
+            env = os.getenv("ENVIRONMENT", "development")
+            if env == "production":
+                raise ValueError(
+                    "SECRET_KEY is required in production. "
+                    "Set it via environment variable or .env file. "
+                    "Generate with: openssl rand -hex 32"
+                )
+        elif len(v) < 32:
+            raise ValueError("SECRET_KEY must be at least 32 characters long for security")
+        return v
+    
+    @field_validator('groq_api_key')
+    @classmethod
+    def validate_groq_key(cls, v: str) -> str:
+        """Validate Groq API key is set"""
+        if not v or v == "":
+            env = os.getenv("ENVIRONMENT", "development")
+            if env == "production":
+                raise ValueError(
+                    "GROQ_API_KEY is required in production. "
+                    "Get your API key from https://console.groq.com/keys"
+                )
+        return v
+    
+    class Config:
+        env_file = ".env"
+        case_sensitive = False
+
+
+settings = Settings()
+
