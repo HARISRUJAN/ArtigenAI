@@ -63,10 +63,12 @@ export const AskAI: React.FC = () => {
         citations: deduplicateCitations(response.citations),
       };
       setMessages((prev) => [...prev, assistantMessage]);
-    } catch (error) {
+    } catch (error: any) {
+      console.error('Search API error:', error);
+      const errorDetails = error?.response?.data?.detail || error?.message || 'Unknown error';
       const errorMessage: Message = {
         role: 'assistant',
-        content: 'Sorry, I encountered an error while processing your question. Please try again.',
+        content: `Sorry, I encountered an error while processing your question: ${errorDetails}. Please try again.`,
       };
       setMessages((prev) => [...prev, errorMessage]);
     } finally {

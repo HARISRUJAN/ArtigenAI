@@ -20,7 +20,9 @@ export const AdminLogin: React.FC = () => {
       await login(username, password);
       navigate('/admin/dashboard');
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
+      console.error('Login error:', err);
+      const errorMessage = err.response?.data?.detail || err.message || 'Login failed. Please check your credentials.';
+      setError(errorMessage);
     }
   };
 

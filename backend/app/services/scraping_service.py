@@ -1,20 +1,57 @@
+import logging
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 from sqlalchemy.orm import Session
-from app.models.database import ScrapingOrigin
+from app.models.database import ScrapingOrigin, Document
+from app.services.crawling_service import crawl_url
+from app.services.ingestion_service import ingestion_service
+from app.models.schemas import DocumentIngest
+
+logger = logging.getLogger(__name__)
+
+
+class CrawlAndIngestResult:
+    """Result of crawl and ingest operation"""
+    def __init__(self, success: bool, message: str, origin_id: int, document_id: Optional[int] = None):
+        self.success = success
+        self.message = message
+        self.origin_id = origin_id
+        self.document_id = document_id
+
 
 class ScrapingService:
     def update_origin_status(
         self,
         db: Session,
         origin_id: int,
-        status: str  # "success" or "failed"
+        crawl_status: str,  # "success" or "failed"
+        qdrant_status: Optional[str] = None,  # "success" or "failed" with optional error message
+        error_message: Optional[str] = None
     ):
-        """Update the last run status of an origin"""
+        """
+        Update the last run status of an origin.
+        
+        Args:
+            db: Database session
+            origin_id: ID of the origin to update
+            crawl_status: Status of the crawl operation ("success" or "failed")
+            qdrant_status: Optional status of Qdrant ingestion ("success" or "failed: error message")
+            error_message: Optional overall error message (deprecated, use qdrant_status instead)
+        """
         origin = db.query(ScrapingOrigin).filter(ScrapingOrigin.id == origin_id).first()
         if origin:
             origin.last_run = datetime.utcnow()
-            origin.last_status = status
+            
+            # Build comprehensive status message
+            status_parts = [f"Crawl: {crawl_status}"]
+            if qdrant_status:
+                origin.qdrant_status = qdrant_status[:500] if len(qdrant_status) > 500 else qdrant_status  # Truncate long errors
+                status_parts.append(f"Qdrant: {qdrant_status[:200]}")  # Truncate for last_status field
+            elif error_message:
+                # Legacy support: if error_message provided but no qdrant_status, assume it's a crawl error
+                status_parts.append(f"Error: {error_message[:200]}")
+            
+            origin.last_status = ", ".join(status_parts)
             db.commit()
     
     def get_origin_status(self, db: Session, origin_id: int) -> Optional[dict]:
@@ -28,8 +65,260 @@ class ScrapingService:
             "name": origin.name,
             "last_run": origin.last_run,
             "last_status": origin.last_status,
+            "qdrant_status": origin.qdrant_status,
             "enabled": origin.enabled
         }
+    
+    async def crawl_and_ingest_origin(self, db: Session, origin_id: int) -> CrawlAndIngestResult:
+        """
+        Crawl an origin URL using Crawl4AI and ingest the content into the vector DB.
+        
+        Args:
+            db: Database session
+            origin_id: ID of the ScrapingOrigin to crawl
+            
+        Returns:
+            CrawlAndIngestResult with success status and message
+        """
+        # Load origin from DB
+        origin = db.query(ScrapingOrigin).filter(ScrapingOrigin.id == origin_id).first()
+        if not origin:
+            return CrawlAndIngestResult(
+                success=False,
+                message=f"Origin with ID {origin_id} not found",
+                origin_id=origin_id
+            )
+        
+        if not origin.enabled:
+            return CrawlAndIngestResult(
+                success=False,
+                message=f"Origin '{origin.name}' is disabled",
+                origin_id=origin_id
+            )
+        
+        import time
+        start_time = time.time()
+        
+        # Structured logging: start of operation
+        logger.info(
+            f"CRAWL_START origin_id={origin_id} url={origin.url} name={origin.name}",
+            extra={
+                "origin_id": origin_id,
+                "url": origin.url,
+                "name": origin.name,
+                "status": "started"
+            }
+        )
+        
+        try:
+            # Step 1: Crawl the URL using Crawl4AI
+            logger.info(f"[Step 1/4] Crawling URL: {origin.url}")
+            crawl_start = time.time()
+            crawl_result = await crawl_url(origin.url)
+            crawl_elapsed_ms = int((time.time() - crawl_start) * 1000)
+            
+            if crawl_result.get("error"):
+                error_msg = crawl_result["error"]
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                # Structured logging: crawl failure
+                logger.error(
+                    f"CRAWL_FAILED origin_id={origin_id} url={origin.url} elapsed_ms={elapsed_ms} error={error_msg}",
+                    extra={
+                        "origin_id": origin_id,
+                        "url": origin.url,
+                        "status": "failed",
+                        "elapsed_ms": elapsed_ms,
+                        "error_message": error_msg,
+                        "stage": "crawl"
+                    }
+                )
+                self.update_origin_status(db, origin_id, crawl_status="failed", error_message=error_msg)
+                return CrawlAndIngestResult(
+                    success=False,
+                    message=f"Crawl failed: {error_msg}",
+                    origin_id=origin_id
+                )
+            
+            # Step 2: Validate extracted content
+            logger.info(f"[Step 2/4] Validating extracted content")
+            markdown_content = crawl_result.get("markdown", "").strip()
+            if not markdown_content:
+                error_msg = "No content extracted from URL (markdown is empty)"
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                # Structured logging: content extraction failure
+                logger.error(
+                    f"CONTENT_EXTRACTION_FAILED origin_id={origin_id} url={origin.url} elapsed_ms={elapsed_ms} error={error_msg}",
+                    extra={
+                        "origin_id": origin_id,
+                        "url": origin.url,
+                        "status": "failed",
+                        "elapsed_ms": elapsed_ms,
+                        "error_message": error_msg,
+                        "stage": "content_extraction"
+                    }
+                )
+                self.update_origin_status(db, origin_id, crawl_status="failed", error_message=error_msg)
+                return CrawlAndIngestResult(
+                    success=False,
+                    message=error_msg,
+                    origin_id=origin_id
+                )
+            
+            logger.info(f"Extracted {len(markdown_content)} characters of content (crawl_elapsed_ms={crawl_elapsed_ms})")
+            
+            # Step 3: Check for duplicates (allow re-crawling to update content)
+            metadata = crawl_result.get("metadata", {})
+            title = metadata.get("title", origin.name) or origin.name
+            logger.info(f"[Step 3/4] Checking for existing documents. Title: {title}")
+            
+            # Check if document with same URL and origin exists
+            existing_doc = db.query(Document).filter(
+                Document.url == origin.url,
+                Document.origin_id == origin_id
+            ).first()
+            
+            if existing_doc:
+                logger.info(f"Document already exists (ID: {existing_doc.id}) for {origin.url}. Updating with new content.")
+                # Instead of skipping, we could update the existing document
+                # For now, we'll skip to avoid duplicates, but log it clearly
+                self.update_origin_status(db, origin_id, crawl_status="success", qdrant_status="success (already ingested)")
+                return CrawlAndIngestResult(
+                    success=True,
+                    message=f"Content already ingested (document ID: {existing_doc.id}). To re-crawl, delete the existing document first.",
+                    origin_id=origin_id,
+                    document_id=existing_doc.id
+                )
+            
+            # Step 4: Prepare and ingest document
+            logger.info(f"[Step 4/4] Preparing document for ingestion")
+            document_metadata = {
+                "origin_id": origin_id,
+                "origin_name": origin.name,
+                "source_type": metadata.get("source_type", "web"),
+                "content_type": metadata.get("content_type", ""),
+                "crawled_at": datetime.utcnow().isoformat(),
+                **metadata
+            }
+            
+            document_data = DocumentIngest(
+                title=title,
+                source=origin.name,
+                url=origin.url,
+                content=markdown_content,
+                metadata=document_metadata
+            )
+            
+            logger.info(f"Ingesting document: {title} ({len(markdown_content)} chars) into vector DB")
+            
+            # Ingest into vector DB using existing ingestion service
+            qdrant_success = False
+            qdrant_error = None
+            try:
+                db_document = ingestion_service.ingest_document(
+                    db=db,
+                    document_data=document_data,
+                    origin_id=origin_id
+                )
+                logger.info(f"Successfully ingested document ID: {db_document.id}")
+                qdrant_success = True
+            except Exception as ingest_error:
+                error_msg = str(ingest_error)
+                elapsed_ms = int((time.time() - start_time) * 1000)
+                # Structured logging: ingestion failure
+                logger.error(
+                    f"INGESTION_FAILED origin_id={origin_id} url={origin.url} elapsed_ms={elapsed_ms} error={error_msg}",
+                    extra={
+                        "origin_id": origin_id,
+                        "url": origin.url,
+                        "status": "failed",
+                        "elapsed_ms": elapsed_ms,
+                        "error_message": error_msg,
+                        "stage": "ingestion"
+                    }
+                )
+                logger.exception(f"Ingestion error for origin {origin_id}: {error_msg}")
+                
+                # Check if it's a Qdrant-specific error
+                if "QDRANT_ERROR:" in error_msg:
+                    qdrant_error = error_msg.replace("QDRANT_ERROR: ", "")
+                    qdrant_success = False
+                    # Crawl succeeded but Qdrant failed
+                    self.update_origin_status(
+                        db, 
+                        origin_id, 
+                        crawl_status="success", 
+                        qdrant_status=f"failed: {qdrant_error[:400]}"
+                    )
+                    return CrawlAndIngestResult(
+                        success=False,
+                        message=f"Crawl succeeded but Qdrant ingestion failed: {qdrant_error}",
+                        origin_id=origin_id
+                    )
+                else:
+                    # General ingestion error (could be chunking, etc.)
+                    qdrant_error = error_msg
+                    qdrant_success = False
+                    self.update_origin_status(
+                        db, 
+                        origin_id, 
+                        crawl_status="success", 
+                        qdrant_status=f"failed: {error_msg[:400]}"
+                    )
+                    return CrawlAndIngestResult(
+                        success=False,
+                        message=f"Ingestion failed: {error_msg}",
+                        origin_id=origin_id
+                    )
+            
+            # Update origin status to success for both crawl and Qdrant
+            if qdrant_success:
+                self.update_origin_status(db, origin_id, crawl_status="success", qdrant_status="success")
+            
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            # Structured logging: success
+            logger.info(
+                f"CRAWL_SUCCESS origin_id={origin_id} url={origin.url} document_id={db_document.id} elapsed_ms={elapsed_ms}",
+                extra={
+                    "origin_id": origin_id,
+                    "url": origin.url,
+                    "document_id": db_document.id,
+                    "status": "success",
+                    "elapsed_ms": elapsed_ms,
+                    "error_message": None
+                }
+            )
+            logger.info(f"✓ Successfully completed crawl and ingest for origin {origin_id}: {origin.name} (Document ID: {db_document.id}, elapsed: {elapsed_ms}ms)")
+            
+            return CrawlAndIngestResult(
+                success=True,
+                message=f"Successfully crawled and ingested {len(markdown_content)} characters. Document ID: {db_document.id}",
+                origin_id=origin_id,
+                document_id=db_document.id
+            )
+            
+        except Exception as e:
+            error_msg = f"Error during crawl and ingest: {str(e)}"
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            # Structured logging: general failure
+            logger.error(
+                f"CRAWL_FAILED origin_id={origin_id} url={origin.url} elapsed_ms={elapsed_ms} error={error_msg}",
+                extra={
+                    "origin_id": origin_id,
+                    "url": origin.url,
+                    "status": "failed",
+                    "elapsed_ms": elapsed_ms,
+                    "error_message": error_msg,
+                    "stage": "unknown"
+                }
+            )
+            logger.exception(f"Crawl and ingest failed for origin {origin_id}: {error_msg}")
+            # If we got here, it's likely a crawl error (before Qdrant)
+            self.update_origin_status(db, origin_id, crawl_status="failed", error_message=error_msg)
+            return CrawlAndIngestResult(
+                success=False,
+                message=error_msg,
+                origin_id=origin_id
+            )
 
 
 scraping_service = ScrapingService()

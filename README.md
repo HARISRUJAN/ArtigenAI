@@ -63,6 +63,64 @@ The AI Governance Literacy Platform provides an intelligent question-answering s
 - OR **Python** 3.11+ and **Node.js** 18+ (for local development)
 - **Qdrant** (local or cloud instance)
 
+## Quick Start
+
+### Local Development (Recommended for V1)
+
+1. **Clone and setup:**
+   ```bash
+   git clone <repository-url>
+   cd aigov
+   ```
+
+2. **Configure environment:**
+   ```bash
+   cd backend
+   cp .env.example .env
+   # Edit .env with your API keys (see Environment Configuration below)
+   ```
+
+3. **Install dependencies:**
+   ```bash
+   # Backend
+   python -m venv aigov_env
+   source aigov_env/bin/activate  # Linux/Mac
+   aigov_env\Scripts\activate     # Windows
+   pip install -r requirements.txt
+   
+   # Frontend
+   cd ../frontend
+   npm install
+   ```
+
+4. **Initialize database:**
+   ```bash
+   cd ../backend
+   python scripts/init_db.py
+   ```
+
+5. **Start services:**
+   ```bash
+   # Terminal 1: Backend (from backend directory)
+   python run_server.py
+   
+   # Terminal 2: Frontend (from frontend directory)
+   npm run dev
+   ```
+
+6. **Access the application:**
+   - Frontend: http://localhost:5173
+   - Backend API: http://localhost:8000
+   - API Documentation: http://localhost:8000/docs
+   - Admin Login: http://localhost:5173/admin/login
+     - Default credentials: `admin` / `admin123` (change in production!)
+
+7. **Seed initial documents (optional):**
+   ```bash
+   cd backend
+   python scripts/seed_documents.py
+   ```
+
 ## Quick Start with Docker
 
 1. **Clone the repository:**

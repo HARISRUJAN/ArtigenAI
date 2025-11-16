@@ -37,7 +37,8 @@ class ScrapingOrigin(Base):
     frequency_hours = Column(Integer, default=24)
     enabled = Column(Boolean, default=True)
     last_run = Column(DateTime, nullable=True)
-    last_status = Column(String, nullable=True)  # "success" or "failed"
+    last_status = Column(String, nullable=True)  # "success" or "failed" or "Crawl: success, Qdrant: success"
+    qdrant_status = Column(String, nullable=True)  # "success" or "failed" with optional error message
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

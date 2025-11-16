@@ -7,6 +7,7 @@ import { AskAI } from './pages/AskAI';
 import { AdminLogin } from './pages/Admin/Login';
 import { AdminDashboard } from './pages/Admin/Dashboard';
 import { Health } from './pages/Admin/Health';
+import { Monitor } from './pages/Admin/Monitor';
 import { Sidebar } from './components/Navigation';
 import './index.css';
 
@@ -41,6 +42,7 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
   
   const navItems = [
+    { label: 'Monitor', path: '/admin/monitor' },
     { label: 'Dashboard', path: '/admin/dashboard' },
     { label: 'Health', path: '/admin/health' },
   ];
@@ -62,6 +64,8 @@ function App() {
             <Route path="/" element={<Landing />} />
             <Route path="/ask" element={<AskAI />} />
             <Route path="/admin/login" element={<AdminLogin />} />
+            {/* Redirect /monitor/login to /admin/login for convenience */}
+            <Route path="/monitor/login" element={<Navigate to="/admin/login" replace />} />
             <Route
               path="/admin/dashboard"
               element={
@@ -82,6 +86,18 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            <Route
+              path="/admin/monitor"
+              element={
+                <ProtectedRoute>
+                  <AdminLayout>
+                    <Monitor />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+            {/* Catch-all route for unknown paths */}
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>

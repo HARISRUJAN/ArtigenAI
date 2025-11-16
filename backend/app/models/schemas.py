@@ -53,6 +53,7 @@ class ScrapingOriginResponse(ScrapingOriginBase):
     id: int
     last_run: Optional[datetime] = None
     last_status: Optional[str] = None
+    qdrant_status: Optional[str] = None
     created_at: datetime
     updated_at: datetime
     
@@ -129,10 +130,22 @@ class OriginStatus(BaseModel):
     origin_name: str
     last_run: Optional[datetime] = None
     last_status: Optional[str] = None
+    qdrant_status: Optional[str] = None
     enabled: bool
+
+
+class QdrantHealth(BaseModel):
+    connected: bool
+    url: str
+    collection_name: str
+    collection_exists: bool
+    points_count: Optional[int] = None
+    vector_size: Optional[int] = None
+    error: Optional[str] = None
 
 
 class SystemHealth(BaseModel):
     status: str
     origins: List[OriginStatus]
+    qdrant: Optional[QdrantHealth] = None
 

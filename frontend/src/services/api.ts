@@ -16,16 +16,30 @@ apiClient.interceptors.request.use((config) => {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
+}, (error) => {
+  return Promise.reject(error);
 });
+
+// Handle 401 Unauthorized responses - clear invalid token
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token is invalid or expired, clear it
+      localStorage.removeItem('auth_token');
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Auth API
 export const authAPI = {
   login: async (username: string, password: string) => {
-    const formData = new FormData();
-    formData.append('username', username);
-    formData.append('password', password);
-    const response = await axios.post(`${API_BASE_URL}/auth/login`, formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
+    const params = new URLSearchParams();
+    params.append('username', username);
+    params.append('password', password);
+    const response = await axios.post(`${API_BASE_URL}/auth/login`, params, {
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     });
     if (response.data.access_token) {
       localStorage.setItem('auth_token', response.data.access_token);
@@ -106,6 +120,11 @@ export const adminAPI = {
   
   getHealth: async () => {
     const response = await apiClient.get('/admin/health');
+    return response.data;
+  },
+  
+  triggerCrawl: async (originId: number) => {
+    const response = await apiClient.post(`/admin/origins/${originId}/crawl`);
     return response.data;
   },
 };
