@@ -14,7 +14,7 @@ The AI Governance Literacy Platform provides an intelligent question-answering s
 - **FastAPI** - High-performance Python web framework
 - **SQLAlchemy** - ORM for database management
 - **Qdrant** - Vector database for semantic search
-- **LangChain** - RAG pipeline and document processing
+- **spaCy** - Semantic chunking and entity extraction (paragraph-based)
 - **Nomic Embeddings** - Local embedding generation (sentence-transformers)
 - **Groq** - Fast LLM inference for answer generation
 - **JWT** - Secure authentication
@@ -87,6 +87,9 @@ The AI Governance Literacy Platform provides an intelligent question-answering s
    source aigov_env/bin/activate  # Linux/Mac
    aigov_env\Scripts\activate     # Windows
    pip install -r requirements.txt
+   
+   # Install spaCy English model (required for semantic chunking)
+   python -m spacy download en_core_web_md
    
    # Frontend
    cd ../frontend

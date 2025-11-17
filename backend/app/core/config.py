@@ -50,7 +50,31 @@ class Settings(BaseSettings):
     )
     qdrant_collection_name: str = Field(
         default="aigov_documents",
-        description="Qdrant collection name for document embeddings"
+        description="Qdrant collection name for document embeddings (legacy)"
+    )
+    qdrant_semantic_collection_name: str = Field(
+        default="aigov_documents_semantic",
+        description="Qdrant collection name for semantic chunked document embeddings"
+    )
+    
+    # spaCy Configuration
+    spacy_model_name: str = Field(
+        default="en_core_web_md",
+        description="spaCy model name for semantic chunking and entity extraction"
+    )
+    max_entities_per_chunk: int = Field(
+        default=10,
+        description="Maximum number of entities to extract per chunk (top N most frequent)"
+    )
+    
+    # Qdrant HNSW Index Configuration
+    qdrant_hnsw_m: int = Field(
+        default=16,
+        description="HNSW index parameter M: number of bi-directional links for each node (default: 16, range: 4-64)"
+    )
+    qdrant_hnsw_ef_construct: int = Field(
+        default=100,
+        description="HNSW index parameter ef_construct: size of dynamic candidate list during construction (default: 100, should be >= M)"
     )
     
     # CORS - stored as string in .env (CORS_ORIGINS), parsed to list

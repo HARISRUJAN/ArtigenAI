@@ -41,29 +41,29 @@ class IngestionService:
             db.flush()  # Get the ID
             logger.info(f"Created document record with ID: {db_document.id}")
             
-            # Step 2: Chunk the document
-            logger.debug("Chunking document content")
-            chunks = rag_service.chunk_document(document_data.content)
-            logger.info(f"Document chunked into {len(chunks)} chunks")
+            # Step 2: Chunk the document using semantic chunking
+            logger.debug("Chunking document content using semantic chunking")
+            semantic_chunks = rag_service.chunk_document(document_data.content)
+            logger.info(f"Document chunked into {len(semantic_chunks)} semantic chunks")
             
-            if not chunks:
+            if not semantic_chunks:
                 raise ValueError("Document chunking resulted in zero chunks")
             
             # Step 3: Store chunks in vector DB and get point IDs
-            logger.debug("Generating embeddings and storing in Qdrant")
+            logger.debug("Generating embeddings and storing in Qdrant semantic collection")
             try:
                 chunk_ids = rag_service.store_document_chunks(
                     document_id=db_document.id,
                     title=document_data.title,
                     source=document_data.source,
                     url=document_data.url,
-                    chunks=chunks,
-                    chunk_metadata=[document_data.metadata] * len(chunks) if document_data.metadata else None
+                    chunks=semantic_chunks,  # Now expects List[Dict] with 'content' and 'entities'
+                    chunk_metadata=[document_data.metadata] * len(semantic_chunks) if document_data.metadata else None
                 )
-                logger.info(f"Stored {len(chunk_ids)} chunks in Qdrant vector database")
+                logger.info(f"Stored {len(chunk_ids)} chunks in Qdrant semantic collection")
                 
-                if len(chunk_ids) != len(chunks):
-                    logger.warning(f"Mismatch: {len(chunks)} chunks but {len(chunk_ids)} point IDs returned")
+                if len(chunk_ids) != len(semantic_chunks):
+                    logger.warning(f"Mismatch: {len(semantic_chunks)} chunks but {len(chunk_ids)} point IDs returned")
             except Exception as qdrant_error:
                 # Qdrant-specific error - log and re-raise with clear message
                 error_msg = f"Qdrant ingestion failed: {str(qdrant_error)}"
@@ -73,19 +73,30 @@ class IngestionService:
             
             # Step 4: Store chunk records in DB
             logger.debug("Storing chunk records in database")
-            for idx, (chunk_content, point_id) in enumerate(zip(chunks, chunk_ids)):
+            for idx, (chunk_dict, point_id) in enumerate(zip(semantic_chunks, chunk_ids)):
+                # Extract content and entities from semantic chunk
+                chunk_content = chunk_dict["content"]
+                chunk_entities = chunk_dict.get("entities", [])
+                
+                # Store entities in chunk metadata if present
+                chunk_meta = {}
+                if document_data.metadata:
+                    chunk_meta.update(document_data.metadata)
+                if chunk_entities:
+                    chunk_meta["entities"] = chunk_entities
+                
                 db_chunk = Chunk(
                     document_id=db_document.id,
                     content=chunk_content,
                     chunk_index=idx,
                     embedding_id=point_id,
-                    chunk_metadata=json.dumps(document_data.metadata) if document_data.metadata else None
+                    chunk_metadata=json.dumps(chunk_meta) if chunk_meta else None
                 )
                 db.add(db_chunk)
             
             db.commit()
             db.refresh(db_document)
-            logger.info(f"✓ Successfully ingested document ID: {db_document.id} with {len(chunks)} chunks")
+            logger.info(f"✓ Successfully ingested document ID: {db_document.id} with {len(semantic_chunks)} chunks")
             
             return db_document
             

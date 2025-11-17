@@ -2,28 +2,29 @@
 RAG (Retrieval-Augmented Generation) Service
 
 This service implements a RAG pipeline for AI governance document querying using:
-1. Document chunking using LangChain RecursiveCharacterTextSplitter
-2. Embedding generation using Nomic embeddings (sentence-transformers)
-3. Vector storage and retrieval using Qdrant
-4. Answer generation using Groq LLM (primary) with OpenAI as fallback option
+1. Document chunking using spaCy semantic chunking (1 paragraph = 1 chunk)
+2. Entity extraction using spaCy NER (stored in Qdrant payload)
+3. Embedding generation using Nomic embeddings (sentence-transformers)
+4. Vector storage and retrieval using Qdrant (semantic collection)
+5. Answer generation using Groq LLM (primary) with OpenAI as fallback option
 
 Architecture Decisions:
+- Semantic chunking using spaCy (paragraph-based) for better context preservation
 - Nomic embeddings (nomic-ai/nomic-embed-text-v1) are used for semantic search
   - 768-dimensional embeddings (local model, no API key needed)
   - Provides high-quality semantic representations for regulatory documents
 - Groq is used for answer generation due to cost-effectiveness and performance
-- LangChain components are integrated for document processing and RAG chain formation
 - OpenAI is kept as optional fallback for answer generation only
 """
 
 import json
 import uuid
 from typing import List, Dict, Optional
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from groq import Groq
 
 from app.services.vector_service import vector_service
+from app.services.semantic_chunking_service import semantic_chunking_service
 from app.core.config import settings
 
 
@@ -32,17 +33,19 @@ class RAGService:
     Retrieval-Augmented Generation service for querying AI governance documents.
     
     This service combines:
-    - Document chunking (1000 tokens, 200 overlap) using LangChain
+    - Semantic chunking using spaCy (1 paragraph = 1 chunk)
+    - Entity extraction using spaCy NER
     - Nomic embeddings for semantic search (768 dimensions)
-    - Qdrant vector database for storage and retrieval
+    - Qdrant vector database for storage and retrieval (semantic collection)
     - Groq LLM for answer generation
     
     The RAG pipeline follows this flow:
-    1. Documents are chunked using LangChain's RecursiveCharacterTextSplitter
-    2. Chunks are embedded using Nomic SentenceTransformer model
-    3. Embeddings are stored in Qdrant vector database
-    4. Queries are embedded and used to retrieve relevant chunks
-    5. Retrieved chunks are used as context for LLM answer generation
+    1. Documents are chunked using spaCy semantic chunking (paragraph-based)
+    2. Entities are extracted from each chunk using spaCy NER
+    3. Chunks are embedded using Nomic SentenceTransformer model
+    4. Embeddings and entities are stored in Qdrant semantic collection
+    5. Queries are embedded and used to retrieve relevant chunks
+    6. Retrieved chunks with entities are used as context for LLM answer generation
     """
     
     def __init__(self):
@@ -53,6 +56,10 @@ class RAGService:
         - Local model, no API key required
         - 768-dimensional embeddings
         - trust_remote_code=True is required for this model
+        
+        Chunking: spaCy semantic chunking service
+        - Paragraph-based chunking (1 paragraph = 1 chunk)
+        - Entity extraction using spaCy NER
         
         LLM: Groq (primary) for answer generation
         - Uses openai/gpt-oss-20b model
@@ -75,31 +82,25 @@ class RAGService:
         # from openai import OpenAI
         # self.openai_client = OpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
         
-        # LangChain text splitter configuration
-        # 1000 token chunks with 200 token overlap ensures:
-        # - Context preservation across chunk boundaries
-        # - Manageable chunk sizes for embedding and retrieval
-        # - Good balance between granularity and context
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-        )
+        # Semantic chunking service (initialized globally)
+        self.semantic_chunker = semantic_chunking_service
     
-    def chunk_document(self, content: str) -> List[str]:
+    def chunk_document(self, content: str) -> List[Dict]:
         """
-        Split a document into overlapping chunks using LangChain.
+        Split a document into semantic chunks using spaCy (1 paragraph = 1 chunk).
         
-        Uses RecursiveCharacterTextSplitter to intelligently split text while
-        preserving context across chunk boundaries.
+        Uses spaCy semantic chunking to split text by paragraphs with entity extraction.
+        Each chunk includes the content and extracted entities.
         
         Args:
             content: Full document text to chunk
             
         Returns:
-            List of text chunks, each approximately 1000 tokens with 200 token overlap
+            List of chunk dictionaries with:
+            - content: Chunk text
+            - entities: List of extracted entities (top N most frequent)
         """
-        chunks = self.text_splitter.split_text(content)
+        chunks = self.semantic_chunker.chunk_by_paragraphs(content)
         return chunks
     
     def get_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -134,30 +135,34 @@ class RAGService:
         title: str,
         source: str,
         url: Optional[str],
-        chunks: List[str],
+        chunks: List[Dict],
         chunk_metadata: Optional[List[dict]] = None
     ) -> List[str]:
         """
-        Store document chunks in the vector database with embeddings.
+        Store document chunks in the semantic vector database with embeddings and entities.
         
         This method implements the storage phase of the RAG pipeline:
-        1. Generate Nomic embeddings for all chunks
-        2. Create Qdrant point IDs (format: {document_id}_{chunk_index})
-        3. Store embeddings and metadata in Qdrant vector database
+        1. Extract chunk content and entities from semantic chunks
+        2. Generate Nomic embeddings for all chunks
+        3. Create Qdrant point IDs (UUIDs)
+        4. Store embeddings, entities, and metadata in Qdrant semantic collection
         
         Args:
             document_id: Database ID of the document
             title: Document title for metadata
             source: Document source (e.g., "NIST", "EU")
             url: Optional document URL
-            chunks: List of text chunks to store
+            chunks: List of chunk dictionaries with 'content' and 'entities' keys
             chunk_metadata: Optional metadata for each chunk
             
         Returns:
             List of Qdrant point IDs for the stored chunks
         """
+        # Extract chunk contents for embedding generation
+        chunk_contents = [chunk["content"] for chunk in chunks]
+        
         # Generate embeddings for all chunks using Nomic model
-        embeddings = self.get_embeddings(chunks)
+        embeddings = self.get_embeddings(chunk_contents)
         
         point_ids = []
         points_payloads = []
@@ -165,7 +170,7 @@ class RAGService:
         # Prepare points for Qdrant storage
         # Qdrant requires point IDs to be either unsigned integers or UUIDs
         # We use UUIDs to ensure uniqueness across documents
-        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        for idx, (chunk_dict, embedding) in enumerate(zip(chunks, embeddings)):
             point_id = str(uuid.uuid4())  # Generate UUID for each chunk
             point_ids.append(point_id)
             
@@ -177,7 +182,8 @@ class RAGService:
                 "source": source,
                 "url": url,
                 "chunk_index": idx,
-                "content": chunk
+                "content": chunk_dict["content"],
+                "entities": chunk_dict.get("entities", [])  # Include extracted entities
             }
             
             # Add optional chunk-level metadata if provided
@@ -186,8 +192,13 @@ class RAGService:
             
             points_payloads.append(payload)
         
-        # Store all embeddings in Qdrant vector database
-        vector_service.add_embeddings(embeddings, point_ids, points_payloads)
+        # Store all embeddings in Qdrant semantic collection
+        vector_service.add_embeddings(
+            embeddings, 
+            point_ids, 
+            points_payloads,
+            collection_name=settings.qdrant_semantic_collection_name
+        )
         return point_ids
     
     def retrieve_relevant_chunks(
@@ -225,8 +236,12 @@ class RAGService:
             normalize_embeddings=True
         ).tolist()
         
-        # Search Qdrant for similar chunks using cosine similarity
-        results = vector_service.search(query_embedding, top_k=top_k)
+        # Search Qdrant semantic collection for similar chunks using cosine similarity
+        results = vector_service.search(
+            query_embedding, 
+            top_k=top_k,
+            collection_name=settings.qdrant_semantic_collection_name
+        )
         
         # Format results with metadata for answer generation
         chunks = []
@@ -239,6 +254,7 @@ class RAGService:
                 "document_url": payload.get("url"),
                 "chunk_index": payload.get("chunk_index", 0),
                 "score": result["score"],  # Cosine similarity score (0-1)
+                "entities": payload.get("entities", []),  # Include extracted entities
                 "metadata": json.loads(payload.get("metadata", "{}")) if payload.get("metadata") else {}
             })
         
@@ -273,26 +289,63 @@ class RAGService:
             Uses Groq (openai/gpt-oss-20b) as primary LLM.
             OpenAI code is commented below as fallback option.
         """
-        # Format context chunks with source attribution
+        # Format context chunks with source attribution and similarity scores
         # This provides the LLM with clear source information for citations
-        context_text = "\n\n".join([
-            f"[Source: {chunk['document_title']} ({chunk['document_source']})]\n{chunk['content']}"
-            for chunk in context_chunks
-        ])
+        context_parts = []
+        for i, chunk in enumerate(context_chunks, 1):
+            source_info = f"[Source {i}: {chunk['document_title']} ({chunk['document_source']})"
+            if chunk.get('document_url'):
+                source_info += f" - {chunk['document_url']}"
+            source_info += "]"
+            
+            # Include entities if available for better context
+            entities_info = ""
+            if chunk.get('entities'):
+                entities = chunk.get('entities', [])
+                if isinstance(entities, list) and len(entities) > 0:
+                    entity_names = [e.get('text', '') if isinstance(e, dict) else str(e) for e in entities[:5]]
+                    entities_info = f"\n[Key entities: {', '.join(entity_names)}]"
+            
+            context_parts.append(f"{source_info}{entities_info}\n{chunk['content']}")
         
-        # Construct RAG prompt with context and question
+        context_text = "\n\n---\n\n".join(context_parts)
+        
+        # Construct improved RAG prompt with context and question
         # The prompt instructs the LLM to:
         # - Answer based on provided context
         # - Cite sources when relevant
         # - Indicate if context is insufficient
-        prompt = f"""You are an AI governance expert assistant. Answer the following question based on the provided context from regulatory documents and frameworks.
+        # - Use structured, clear formatting
+        prompt = f"""You are an expert AI governance assistant specializing in regulatory frameworks, standards, and best practices for AI governance, risk management, and compliance.
 
-Context:
+Your task is to answer the user's question using ONLY the provided context from authoritative sources. Follow these guidelines:
+
+1. **Answer Accuracy**: Base your answer strictly on the provided context. Do not use external knowledge beyond what's in the context.
+
+2. **Source Citation**: When referencing information, cite the specific source using the format: "According to [Source Name]..." or "As stated in [Source Name]..."
+
+3. **Completeness**: Provide a comprehensive answer that addresses all aspects of the question if the context contains relevant information.
+
+4. **Clarity**: Structure your answer clearly with:
+   - A direct answer to the question
+   - Supporting details and explanations
+   - Specific examples or quotes from the context when relevant
+   - Source citations
+4.1 **Guidelines**:
+- Provide accurate, cited information
+- Acknowledge uncertainty when appropriate
+- Focus on practical, actionable insights
+- Maintain political neutrality
+- Update: Current date is {current_date}
+
+5. **Limitations**: If the context doesn't contain enough information to fully answer the question, clearly state what information is available and what is missing.
+
+Context from documents:
 {context_text}
 
 Question: {question}
 
-Provide a clear, accurate answer based on the context. If the context doesn't contain enough information to answer the question, say so. Cite the sources in your answer when relevant."""
+Provide your answer:"""
 
         # Generate answer using Groq LLM (primary)
         try:
@@ -304,16 +357,16 @@ Provide a clear, accurate answer based on the context. If the context doesn't co
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are a helpful AI governance literacy assistant."
+                        "content": "You are an expert AI governance assistant. You provide accurate, well-sourced answers based on regulatory documents and frameworks. Always cite your sources and be precise in your responses."
                     },
                     {
                         "role": "user",
                         "content": prompt
                     }
                 ],
-                temperature=1,
-                max_completion_tokens=8192,
-                top_p=1,
+                temperature=0.7,  # Lower temperature for more focused, consistent answers
+                max_completion_tokens=4096,  # Reasonable limit for detailed answers
+                top_p=0.9,  # Slightly lower for more focused responses
                 reasoning_effort="medium",
                 stream=False  # Non-streaming for simplicity
             )

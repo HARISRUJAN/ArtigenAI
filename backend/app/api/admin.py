@@ -8,7 +8,8 @@ from app.models.schemas import (
     ScrapingOriginResponse,
     SystemHealth,
     OriginStatus,
-    QdrantHealth
+    QdrantHealth,
+    QdrantCollectionsHealth
 )
 from app.core.security import get_current_active_admin
 
@@ -224,28 +225,79 @@ async def get_system_health(
         for origin in origins
     ]
     
-    # Check Qdrant health
-    qdrant_health = None
+    # Check Qdrant health for both collections
+    
+    qdrant_collections_health = None
+    qdrant_health = None  # Keep legacy for backward compatibility
+    
     try:
         # Initialize vector service if not already initialized
         if not vector_service._initialized:
             vector_service._init_client()
         
-        # Get collection info
-        collection_info = vector_service.client.get_collection(vector_service.collection_name)
-        points_count = vector_service.client.count(vector_service.collection_name).count
+        # Check legacy collection (if exists)
+        legacy_collection_health = None
+        try:
+            legacy_info = vector_service.client.get_collection(vector_service.collection_name)
+            legacy_count = vector_service.client.count(vector_service.collection_name).count
+            legacy_collection_health = QdrantHealth(
+                connected=True,
+                url=settings.qdrant_url,
+                collection_name=vector_service.collection_name,
+                collection_exists=True,
+                points_count=legacy_count,
+                vector_size=legacy_info.config.params.vectors.size if hasattr(legacy_info.config.params.vectors, 'size') else None
+            )
+            # Also set legacy qdrant_health for backward compatibility
+            qdrant_health = legacy_collection_health
+        except Exception as legacy_error:
+            # Legacy collection doesn't exist or error - that's okay
+            legacy_collection_health = QdrantHealth(
+                connected=True,
+                url=settings.qdrant_url,
+                collection_name=vector_service.collection_name,
+                collection_exists=False,
+                points_count=0
+            )
         
-        qdrant_health = QdrantHealth(
+        # Check semantic collection
+        semantic_collection_health = None
+        try:
+            semantic_info = vector_service.client.get_collection(vector_service.semantic_collection_name)
+            semantic_count = vector_service.client.count(vector_service.semantic_collection_name).count
+            semantic_collection_health = QdrantHealth(
+                connected=True,
+                url=settings.qdrant_url,
+                collection_name=vector_service.semantic_collection_name,
+                collection_exists=True,
+                points_count=semantic_count,
+                vector_size=semantic_info.config.params.vectors.size if hasattr(semantic_info.config.params.vectors, 'size') else None
+            )
+        except Exception as semantic_error:
+            semantic_collection_health = QdrantHealth(
+                connected=True,
+                url=settings.qdrant_url,
+                collection_name=vector_service.semantic_collection_name,
+                collection_exists=False,
+                points_count=0,
+                error=str(semantic_error)
+            )
+        
+        qdrant_collections_health = QdrantCollectionsHealth(
             connected=True,
             url=settings.qdrant_url,
-            collection_name=vector_service.collection_name,
-            collection_exists=True,
-            points_count=points_count,
-            vector_size=collection_info.config.params.vectors.size if hasattr(collection_info.config.params.vectors, 'size') else None
+            legacy_collection=legacy_collection_health,
+            semantic_collection=semantic_collection_health
         )
+        
     except Exception as e:
         error_type = type(e).__name__
         error_str = str(e) if str(e) else repr(e)
+        qdrant_collections_health = QdrantCollectionsHealth(
+            connected=False,
+            url=settings.qdrant_url,
+            error=f"{error_type}: {error_str}"
+        )
         qdrant_health = QdrantHealth(
             connected=False,
             url=settings.qdrant_url,
@@ -257,6 +309,7 @@ async def get_system_health(
     return SystemHealth(
         status="healthy",
         origins=origin_statuses,
-        qdrant=qdrant_health
+        qdrant=qdrant_health,  # Legacy support
+        qdrant_collections=qdrant_collections_health  # New: both collections
     )
 

@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 from app.models.database import UserRole
 
@@ -102,6 +102,7 @@ class DocumentChunk(BaseModel):
     document_source: str
     document_url: Optional[str] = None
     chunk_index: int
+    entities: Optional[List[Dict]] = None  # Extracted entities from spaCy NER
     metadata: Optional[dict] = None
 
 
@@ -144,8 +145,18 @@ class QdrantHealth(BaseModel):
     error: Optional[str] = None
 
 
+class QdrantCollectionsHealth(BaseModel):
+    """Health status for both Qdrant collections"""
+    connected: bool
+    url: str
+    legacy_collection: Optional[QdrantHealth] = None  # Old collection (aigov_documents)
+    semantic_collection: Optional[QdrantHealth] = None  # New semantic collection
+    error: Optional[str] = None
+
+
 class SystemHealth(BaseModel):
     status: str
     origins: List[OriginStatus]
-    qdrant: Optional[QdrantHealth] = None
+    qdrant: Optional[QdrantHealth] = None  # Legacy: single collection
+    qdrant_collections: Optional[QdrantCollectionsHealth] = None  # New: both collections
 
