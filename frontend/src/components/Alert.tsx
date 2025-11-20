@@ -7,6 +7,7 @@ export interface AlertProps {
   title?: string;
   children: React.ReactNode;
   onClose?: () => void;
+  className?: string;
 }
 
 const variantStyles: Record<AlertVariant, { bg: string; border: string; text: string; icon: string }> = {
@@ -41,11 +42,12 @@ export const Alert: React.FC<AlertProps> = ({
   title,
   children,
   onClose,
+  className = '',
 }) => {
   const styles = variantStyles[variant];
   
   return (
-    <div className={`${styles.bg} ${styles.border} border rounded-lg p-4`}>
+    <div className={`${styles.bg} ${styles.border} border rounded-lg p-4 ${className}`}>
       <div className="flex">
         <div className="flex-shrink-0">
           {variant === 'info' && (

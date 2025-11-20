@@ -255,7 +255,7 @@ class VectorService:
             
             logger.debug(f"Search returned {len(results)} results from collection '{target_collection}'")
             return results
-            
+        
         except Exception as e:
             error_type = type(e).__name__
             error_details = str(e) if str(e) else repr(e)

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.models.database import Document, Chunk
 from app.services.rag_service import rag_service
 from app.models.schemas import DocumentIngest
+from app.utils.string_utils import escape_for_fstring
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,9 @@ class IngestionService:
         4. Store chunk records in database
         """
         try:
-            logger.info(f"Starting ingestion for document: {document_data.title} ({len(document_data.content)} chars)")
+            # Escape title to prevent f-string evaluation errors
+            title_safe = escape_for_fstring(document_data.title)
+            logger.info(f"Starting ingestion for document: {title_safe} ({len(document_data.content)} chars)")
             
             # Step 1: Create document record
             logger.debug("Creating document record in database")

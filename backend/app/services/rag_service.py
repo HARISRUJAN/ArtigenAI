@@ -18,6 +18,7 @@ Architecture Decisions:
 """
 
 import json
+import logging
 import uuid
 from typing import List, Dict, Optional
 from sentence_transformers import SentenceTransformer
@@ -26,6 +27,9 @@ from groq import Groq
 from app.services.vector_service import vector_service
 from app.services.semantic_chunking_service import semantic_chunking_service
 from app.core.config import settings
+from app.utils.string_utils import escape_for_fstring
+
+logger = logging.getLogger(__name__)
 
 
 class RAGService:
@@ -75,7 +79,17 @@ class RAGService:
         print("[OK] Nomic embedding model loaded successfully")
         
         # Groq client for answer generation (primary LLM)
-        self.groq_client = Groq(api_key=settings.groq_api_key) if settings.groq_api_key else None
+        # Only initialize if API key is provided and not empty
+        if settings.groq_api_key and settings.groq_api_key.strip():
+            try:
+                self.groq_client = Groq(api_key=settings.groq_api_key)
+                print("[OK] Groq client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize Groq client: {e}")
+                self.groq_client = None
+        else:
+            logger.warning("Groq API key not configured. Answer generation will fail.")
+            self.groq_client = None
         
         # OpenAI client kept as optional fallback (commented out in generate_answer method)
         # Uncomment if you need to switch back to OpenAI:
@@ -247,6 +261,18 @@ class RAGService:
         chunks = []
         for result in results:
             payload = result["payload"]
+            # Safely parse metadata JSON
+            metadata = {}
+            if payload.get("metadata"):
+                try:
+                    if isinstance(payload.get("metadata"), str):
+                        metadata = json.loads(payload.get("metadata", "{}"))
+                    elif isinstance(payload.get("metadata"), dict):
+                        metadata = payload.get("metadata")
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.warning(f"Failed to parse metadata JSON: {e}, using empty dict")
+                    metadata = {}
+            
             chunks.append({
                 "content": payload.get("content", ""),
                 "document_title": payload.get("title", ""),
@@ -255,7 +281,7 @@ class RAGService:
                 "chunk_index": payload.get("chunk_index", 0),
                 "score": result["score"],  # Cosine similarity score (0-1)
                 "entities": payload.get("entities", []),  # Include extracted entities
-                "metadata": json.loads(payload.get("metadata", "{}")) if payload.get("metadata") else {}
+                "metadata": metadata
             })
         
         return chunks
@@ -291,11 +317,19 @@ class RAGService:
         """
         # Format context chunks with source attribution and similarity scores
         # This provides the LLM with clear source information for citations
+        # IMPORTANT: Use string concatenation instead of f-strings to avoid evaluation errors
+        # Do NOT escape here - we'll escape once at the end before using .format()
         context_parts = []
         for i, chunk in enumerate(context_chunks, 1):
-            source_info = f"[Source {i}: {chunk['document_title']} ({chunk['document_source']})"
-            if chunk.get('document_url'):
-                source_info += f" - {chunk['document_url']}"
+            # Get raw values (no escaping yet - we'll escape once at the end)
+            doc_title = str(chunk.get('document_title', ''))
+            doc_source = str(chunk.get('document_source', ''))
+            doc_url = str(chunk.get('document_url', '')) if chunk.get('document_url') else None
+            
+            # Build source_info using string concatenation (NOT f-strings) to avoid evaluation
+            source_info = "[Source " + str(i) + ": " + doc_title + " (" + doc_source + ")"
+            if doc_url:
+                source_info += " - " + doc_url
             source_info += "]"
             
             # Include entities if available for better context
@@ -303,12 +337,28 @@ class RAGService:
             if chunk.get('entities'):
                 entities = chunk.get('entities', [])
                 if isinstance(entities, list) and len(entities) > 0:
-                    entity_names = [e.get('text', '') if isinstance(e, dict) else str(e) for e in entities[:5]]
-                    entities_info = f"\n[Key entities: {', '.join(entity_names)}]"
+                    # Get entity names without escaping (we'll escape once at the end)
+                    entity_names = []
+                    for e in entities[:5]:
+                        if isinstance(e, dict):
+                            entity_text = str(e.get('text', ''))
+                        else:
+                            entity_text = str(e)
+                        entity_names.append(entity_text)
+                    # Use string concatenation instead of f-string
+                    entities_info = "\n[Key entities: " + ", ".join(entity_names) + "]"
             
-            context_parts.append(f"{source_info}{entities_info}\n{chunk['content']}")
+            # Get chunk content without escaping (we'll escape once at the end)
+            chunk_content = str(chunk.get('content', ''))
+            # Use string concatenation instead of f-string to avoid any evaluation
+            context_parts.append(source_info + entities_info + "\n" + chunk_content)
         
         context_text = "\n\n---\n\n".join(context_parts)
+        
+        # Escape curly braces ONCE at the end before using .format()
+        # This prevents double-escaping and ensures all curly braces are properly escaped
+        context_text_escaped = context_text.replace('{', '{{').replace('}', '}}')
+        question_escaped = question.replace('{', '{{').replace('}', '}}')
         
         # Construct improved RAG prompt with context and question
         # The prompt instructs the LLM to:
@@ -316,7 +366,8 @@ class RAGService:
         # - Cite sources when relevant
         # - Indicate if context is insufficient
         # - Use structured, clear formatting
-        prompt = f"""You are an expert AI governance assistant specializing in regulatory frameworks, standards, and best practices for AI governance, risk management, and compliance.
+        # Using .format() instead of f-string to avoid issues with curly braces in content
+        prompt = """You are an expert AI governance assistant specializing in regulatory frameworks, standards, and best practices for AI governance, risk management, and compliance.
 
 Your task is to answer the user's question using ONLY the provided context from authoritative sources. Follow these guidelines:
 
@@ -331,33 +382,35 @@ Your task is to answer the user's question using ONLY the provided context from 
    - Supporting details and explanations
    - Specific examples or quotes from the context when relevant
    - Source citations
-4.1 **Guidelines**:
-- Provide accurate, cited information
-- Acknowledge uncertainty when appropriate
-- Focus on practical, actionable insights
-- Maintain political neutrality
-- Update: Current date is {current_date}
 
-5. **Limitations**: If the context doesn't contain enough information to fully answer the question, clearly state what information is available and what is missing.
+5. **Format**: Write your answer in plain natural language text only. Do NOT write code, define variables (like current_date, datetime, etc.), or use programming syntax. Answer as if you are speaking to someone verbally.
+
+6. **Limitations**: If the context doesn't contain enough information to fully answer the question, clearly state what information is available and what is missing.
 
 Context from documents:
 {context_text}
 
 Question: {question}
 
-Provide your answer:"""
+Provide your answer in plain text (no code, no variables, no programming constructs):""".format(
+            context_text=context_text_escaped,
+            question=question_escaped
+        )
 
         # Generate answer using Groq LLM (primary)
         try:
             if not self.groq_client:
-                raise ValueError("Groq API key not configured")
+                error_msg = "Groq API key not configured. Please set GROQ_API_KEY in your .env file."
+                logger.error(error_msg)
+                raise ValueError(error_msg)
             
+            logger.debug(f"Calling Groq API with model openai/gpt-oss-20b")
             completion = self.groq_client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+                model="openai/gpt-oss-20b",  # Groq model name
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an expert AI governance assistant. You provide accurate, well-sourced answers based on regulatory documents and frameworks. Always cite your sources and be precise in your responses."
+                        "content": "You are an expert AI governance assistant. You provide accurate, well-sourced answers based on regulatory documents and frameworks. Always cite your sources and be precise in your responses.\n\nCRITICAL: Provide answers in plain text format ONLY. Do NOT generate:\n- Python code\n- Variable definitions (like current_date, datetime, etc.)\n- Programming constructs (def, import, class, etc.)\n- Code blocks or snippets\n- Any executable code\n\nWrite your answer as natural language text only, similar to how a human expert would explain concepts verbally."
                     },
                     {
                         "role": "user",
@@ -367,33 +420,116 @@ Provide your answer:"""
                 temperature=0.7,  # Lower temperature for more focused, consistent answers
                 max_completion_tokens=4096,  # Reasonable limit for detailed answers
                 top_p=0.9,  # Slightly lower for more focused responses
-                reasoning_effort="medium",
                 stream=False  # Non-streaming for simplicity
             )
             
-            return completion.choices[0].message.content
+            # Extract and validate response
+            if not completion or not completion.choices:
+                raise ValueError("Empty response from Groq API")
+            
+            answer = completion.choices[0].message.content
+            
+            # Validate answer is not empty and doesn't contain code-like errors
+            if not answer or not answer.strip():
+                raise ValueError("Empty answer generated by LLM")
+            
+            # Immediate check for the specific error the user is experiencing
+            if "name 'current_date' is not defined" in answer or "name 'current_date'" in answer:
+                answer_safe = escape_for_fstring(answer[:500])
+                logger.error(f"LLM generated response with current_date error. Full response: {answer_safe}")
+                # Try to extract any meaningful text before the error
+                error_pos = answer.lower().find("current_date")
+                if error_pos > 50:  # If there's text before the error
+                    answer = answer[:error_pos].strip()
+                    # Remove any trailing incomplete sentences
+                    if answer and not answer.endswith(('.', '!', '?')):
+                        last_period = answer.rfind('.')
+                        if last_period > 0:
+                            answer = answer[:last_period + 1].strip()
+                else:
+                    answer = ""  # No meaningful text before error
+            
+            # Check for common code-like errors in response (including specific variable errors)
+            error_indicators = [
+                "NameError", "is not defined", "current_date", "AttributeError", 
+                "TypeError", "SyntaxError", "IndentationError", "def ", "import ",
+                "print(", "return ", "if __name__", "class ", "try:", "except",
+                "name 'current_date'", "name 'datetime'", "Traceback", "File \""
+            ]
+            
+            has_code_error = any(indicator in answer for indicator in error_indicators)
+            
+            if has_code_error:
+                answer_safe = escape_for_fstring(answer[:200])
+                logger.warning(f"LLM response contains code-like errors, attempting to clean response. Answer preview: {answer_safe}...")
+                # Try to extract just the text answer, removing any code snippets
+                lines = answer.split('\n')
+                cleaned_lines = []
+                in_code_block = False
+                skip_next = False
+                
+                for i, line in enumerate(lines):
+                    # Skip code block markers
+                    if '```' in line:
+                        in_code_block = not in_code_block
+                        continue
+                    
+                    # Skip if in code block
+                    if in_code_block:
+                        continue
+                    
+                    # Skip lines that look like code
+                    line_stripped = line.strip()
+                    if (line_stripped.startswith('def ') or 
+                        line_stripped.startswith('import ') or 
+                        line_stripped.startswith('from ') or
+                        line_stripped.startswith('class ') or
+                        line_stripped.startswith('if __name__') or
+                        line_stripped.startswith('try:') or
+                        line_stripped.startswith('except') or
+                        '=' in line_stripped and ('current_date' in line_stripped or 'datetime' in line_stripped) or
+                        any(error in line for error in ["NameError", "is not defined", "AttributeError"])):
+                        continue
+                    
+                    # Keep text lines
+                    cleaned_lines.append(line)
+                
+                answer = '\n'.join(cleaned_lines).strip()
+                
+                # If cleaning removed everything or still has errors, try to extract meaningful text
+                if not answer or any(indicator in answer for indicator in error_indicators):
+                    answer_safe = escape_for_fstring(answer[:500])
+                    logger.error(f"Failed to clean LLM response. Original: {answer_safe}")
+                    # Try one more time: extract only sentences that don't contain code patterns
+                    sentences = answer.split('.')
+                    clean_sentences = []
+                    for sent in sentences:
+                        sent = sent.strip()
+                        if sent and not any(indicator in sent for indicator in error_indicators):
+                            clean_sentences.append(sent)
+                    answer = '. '.join(clean_sentences).strip()
+                
+                if not answer:
+                    raise ValueError("LLM generated invalid response with code errors that could not be cleaned. Please try rephrasing your question.")
+            
+            return answer
             
         except Exception as e:
-            # Fallback error message if Groq fails
-            error_msg = f"Error generating answer: {str(e)}"
+            # Log the error and re-raise as ValueError so API can handle it properly
+            error_type = type(e).__name__
+            error_msg = str(e)
+            logger.error(f"Groq API error ({error_type}): {error_msg}")
             
-            # Alternative: Uncomment below to use OpenAI as fallback
-            # if self.openai_client:
-            #     try:
-            #         response = self.openai_client.chat.completions.create(
-            #             model="gpt-4",
-            #             messages=[
-            #                 {"role": "system", "content": "You are a helpful AI governance literacy assistant."},
-            #                 {"role": "user", "content": prompt}
-            #             ],
-            #             temperature=0.7,
-            #             max_tokens=1000
-            #         )
-            #         return response.choices[0].message.content
-            #     except Exception as fallback_error:
-            #         return f"Error: Unable to generate answer. {error_msg} Fallback also failed: {str(fallback_error)}"
-            
-            return f"Error: Unable to generate answer. {error_msg} Please check your Groq API key configuration."
+            # Check for specific error types
+            if "api key" in error_msg.lower() or "authentication" in error_msg.lower() or "unauthorized" in error_msg.lower():
+                raise ValueError("Groq API key is invalid or expired. Please check your GROQ_API_KEY in .env file.") from e
+            elif "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+                raise ValueError("Groq API rate limit exceeded. Please try again later.") from e
+            elif "model" in error_msg.lower() and ("not found" in error_msg.lower() or "invalid" in error_msg.lower()):
+                raise ValueError(f"Groq model error: {error_msg}. Please check the model name configuration.") from e
+            else:
+                # Re-raise as ValueError so the API endpoint can catch and return proper error response
+                raise ValueError(f"Unable to generate answer: {error_msg}. Please check your Groq API configuration.") from e
 
 
 # Global RAG service instance

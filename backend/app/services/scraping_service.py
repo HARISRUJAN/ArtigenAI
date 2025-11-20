@@ -111,16 +111,38 @@ class ScrapingService:
         )
         
         try:
-            # Step 1: Crawl the URL using Crawl4AI
+            # Step 1: Crawl the URL using multi-page crawler
             logger.info(f"[Step 1/4] Crawling URL: {origin.url}")
             crawl_start = time.time()
-            crawl_result = await crawl_url(origin.url)
+            
+            # Get crawl configuration from settings
+            from app.core.config import settings
+            from app.services.crawling_service import crawl_multi_page
+            
+            # Use multi-page crawler with configured limits
+            max_depth = settings.crawl_max_depth
+            max_pages = settings.crawl_max_pages_per_run
+            
+            crawl_results = await crawl_multi_page(
+                start_urls=[origin.url],
+                max_depth=max_depth,
+                max_pages=max_pages,
+                allowed_paths=settings.crawl_allowed_paths if settings.crawl_allowed_paths else None,
+                excluded_paths=settings.crawl_excluded_paths if settings.crawl_excluded_paths else None,
+                same_domain_only=True,  # Domain-seeded mode for origins
+                base_domain=None  # Will be determined from origin.url
+            )
             crawl_elapsed_ms = int((time.time() - crawl_start) * 1000)
             
-            if crawl_result.get("error"):
-                error_msg = crawl_result["error"]
+            # Check if any pages were crawled successfully
+            successful_results = [r for r in crawl_results if not r.get("error")]
+            failed_results = [r for r in crawl_results if r.get("error")]
+            
+            if not successful_results:
+                error_msg = "No pages crawled successfully"
+                if failed_results:
+                    error_msg = f"All {len(failed_results)} pages failed. First error: {failed_results[0].get('error', 'Unknown error')}"
                 elapsed_ms = int((time.time() - start_time) * 1000)
-                # Structured logging: crawl failure
                 logger.error(
                     f"CRAWL_FAILED origin_id={origin_id} url={origin.url} elapsed_ms={elapsed_ms} error={error_msg}",
                     extra={
@@ -129,7 +151,9 @@ class ScrapingService:
                         "status": "failed",
                         "elapsed_ms": elapsed_ms,
                         "error_message": error_msg,
-                        "stage": "crawl"
+                        "stage": "crawl",
+                        "pages_attempted": len(crawl_results),
+                        "pages_failed": len(failed_results)
                     }
                 )
                 self.update_origin_status(db, origin_id, crawl_status="failed", error_message=error_msg)
@@ -139,13 +163,26 @@ class ScrapingService:
                     origin_id=origin_id
                 )
             
-            # Step 2: Validate extracted content
-            logger.info(f"[Step 2/4] Validating extracted content")
-            markdown_content = crawl_result.get("markdown", "").strip()
+            # Aggregate content from all successful pages
+            logger.info(f"[Step 2/4] Aggregating content from {len(successful_results)} pages")
+            
+            # Combine markdown content with page separators
+            markdown_parts = []
+            titles = []
+            for result in successful_results:
+                page_markdown = result.get("markdown", "").strip()
+                if page_markdown:
+                    markdown_parts.append(page_markdown)
+                    page_title = result.get("metadata", {}).get("title", "")
+                    if page_title:
+                        titles.append(page_title)
+            
+            # Join with page separators
+            markdown_content = "\n\n---\n\n".join(markdown_parts)
+            
             if not markdown_content:
-                error_msg = "No content extracted from URL (markdown is empty)"
+                error_msg = "No content extracted from any crawled pages"
                 elapsed_ms = int((time.time() - start_time) * 1000)
-                # Structured logging: content extraction failure
                 logger.error(
                     f"CONTENT_EXTRACTION_FAILED origin_id={origin_id} url={origin.url} elapsed_ms={elapsed_ms} error={error_msg}",
                     extra={
@@ -154,7 +191,8 @@ class ScrapingService:
                         "status": "failed",
                         "elapsed_ms": elapsed_ms,
                         "error_message": error_msg,
-                        "stage": "content_extraction"
+                        "stage": "content_extraction",
+                        "pages_crawled": len(successful_results)
                     }
                 )
                 self.update_origin_status(db, origin_id, crawl_status="failed", error_message=error_msg)
@@ -164,11 +202,19 @@ class ScrapingService:
                     origin_id=origin_id
                 )
             
-            logger.info(f"Extracted {len(markdown_content)} characters of content (crawl_elapsed_ms={crawl_elapsed_ms})")
+            # Use first page's title or origin name
+            title = titles[0] if titles else origin.name
+            
+            logger.info(f"Extracted {len(markdown_content)} characters from {len(successful_results)} pages (crawl_elapsed_ms={crawl_elapsed_ms})")
+            
+            # Aggregate metadata from first successful page
+            first_result = successful_results[0]
+            metadata = first_result.get("metadata", {}).copy()
+            metadata["pages_crawled"] = len(successful_results)
+            metadata["pages_failed"] = len(failed_results)
+            metadata["total_pages_attempted"] = len(crawl_results)
             
             # Step 3: Check for duplicates (allow re-crawling to update content)
-            metadata = crawl_result.get("metadata", {})
-            title = metadata.get("title", origin.name) or origin.name
             logger.info(f"[Step 3/4] Checking for existing documents. Title: {title}")
             
             # Check if document with same URL and origin exists
@@ -272,22 +318,25 @@ class ScrapingService:
             
             # Update origin status to success for both crawl and Qdrant
             if qdrant_success:
-                self.update_origin_status(db, origin_id, crawl_status="success", qdrant_status="success")
+                status_msg = f"success ({len(successful_results)}/{len(crawl_results)} pages)"
+                self.update_origin_status(db, origin_id, crawl_status=status_msg, qdrant_status="success")
             
             elapsed_ms = int((time.time() - start_time) * 1000)
             # Structured logging: success
             logger.info(
-                f"CRAWL_SUCCESS origin_id={origin_id} url={origin.url} document_id={db_document.id} elapsed_ms={elapsed_ms}",
+                f"CRAWL_SUCCESS origin_id={origin_id} url={origin.url} document_id={db_document.id} elapsed_ms={elapsed_ms} pages_crawled={len(successful_results)}",
                 extra={
                     "origin_id": origin_id,
                     "url": origin.url,
                     "document_id": db_document.id,
                     "status": "success",
                     "elapsed_ms": elapsed_ms,
-                    "error_message": None
+                    "error_message": None,
+                    "pages_crawled": len(successful_results),
+                    "pages_failed": len(failed_results)
                 }
             )
-            logger.info(f"✓ Successfully completed crawl and ingest for origin {origin_id}: {origin.name} (Document ID: {db_document.id}, elapsed: {elapsed_ms}ms)")
+            logger.info(f"✓ Successfully completed crawl and ingest for origin {origin_id}: {origin.name} (Document ID: {db_document.id}, {len(successful_results)} pages, elapsed: {elapsed_ms}ms)")
             
             return CrawlAndIngestResult(
                 success=True,

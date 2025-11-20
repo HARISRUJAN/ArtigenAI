@@ -84,11 +84,89 @@ class Settings(BaseSettings):
         description="Comma-separated list of allowed CORS origins"
     )
     
+    # Crawling Configuration
+    crawl_max_depth: int = Field(
+        default=1,
+        description="Maximum crawl depth (0 = no limit, 1 = single page only, 2+ = follow links)"
+    )
+    crawl_max_pages_per_run: int = Field(
+        default=30,
+        description="Maximum number of pages to crawl per origin per run"
+    )
+    crawl_timeout_seconds: int = Field(
+        default=15,
+        description="Timeout in seconds for each URL crawl"
+    )
+    crawl_retry_attempts: int = Field(
+        default=2,
+        description="Maximum number of retry attempts for transient errors"
+    )
+    crawl_retry_delay_seconds: float = Field(
+        default=1.0,
+        description="Initial retry delay in seconds (exponential backoff)"
+    )
+    crawl_delay_between_requests: float = Field(
+        default=1.0,
+        description="Delay in seconds between requests for politeness"
+    )
+    crawl_respect_robots_txt: bool = Field(
+        default=True,
+        description="Whether to respect robots.txt rules"
+    )
+    crawl_user_agent: str = Field(
+        default="aigov-crawler/1.0",
+        description="User agent string for crawling"
+    )
+    crawl_allowed_paths_str: str = Field(
+        default="",
+        alias="CRAWL_ALLOWED_PATHS",
+        description="Comma-separated list of URL path patterns to allow (regex patterns). Empty = allow all paths."
+    )
+    crawl_excluded_paths_str: str = Field(
+        default="",
+        alias="CRAWL_EXCLUDED_PATHS",
+        description="Comma-separated list of URL path patterns to exclude (regex patterns). Common exclusions: /api/, /admin/, /login/, etc."
+    )
+    
+    # Search API Configuration
+    perplexity_api_key: str = Field(
+        default="",
+        description="Perplexity API key for query-seeded crawling. Get from https://www.perplexity.ai/settings/api"
+    )
+    search_api_provider: str = Field(
+        default="perplexity",
+        description="Search API provider: 'perplexity' or 'google'"
+    )
+    google_search_api_key: str = Field(
+        default="",
+        description="Google Custom Search API key (fallback for search-seeded crawling)"
+    )
+    google_search_engine_id: str = Field(
+        default="",
+        description="Google Custom Search Engine ID (fallback for search-seeded crawling)"
+    )
+    
     @computed_field
     @property
     def cors_origins(self) -> List[str]:
         """Parse CORS origins from comma-separated string"""
         return [origin.strip() for origin in self.cors_origins_str.split(',') if origin.strip()]
+    
+    @computed_field
+    @property
+    def crawl_allowed_paths(self) -> List[str]:
+        """Parse allowed crawl paths from comma-separated string"""
+        if not self.crawl_allowed_paths_str:
+            return []
+        return [path.strip() for path in self.crawl_allowed_paths_str.split(',') if path.strip()]
+    
+    @computed_field
+    @property
+    def crawl_excluded_paths(self) -> List[str]:
+        """Parse excluded crawl paths from comma-separated string"""
+        if not self.crawl_excluded_paths_str:
+            return []
+        return [path.strip() for path in self.crawl_excluded_paths_str.split(',') if path.strip()]
     
     @field_validator('secret_key')
     @classmethod
@@ -104,7 +182,7 @@ class Settings(BaseSettings):
                     "Generate with: openssl rand -hex 32"
                 )
         elif len(v) < 32:
-            raise ValueError("SECRET_KEY must be at least 32 characters long for security")
+            raise ValueError("must be at least 32 characters long for security")
         return v
     
     @field_validator('groq_api_key')

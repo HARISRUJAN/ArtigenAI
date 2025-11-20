@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { Button } from '../components/Button';
 import { Input } from '../components/Input';
-import { Card, CardContent } from '../components/Card';
 import { searchAPI } from '../services/api';
 import ReactMarkdown from 'react-markdown';
 
@@ -98,49 +97,49 @@ export const AskAI: React.FC = () => {
   };
 
   // Markdown table styling component
-  const markdownComponents = {
-    table: ({ children }: { children: React.ReactNode }) => (
+  const markdownComponents: any = {
+    table: ({ children }: { children?: React.ReactNode }) => (
       <div className="overflow-x-auto my-4">
         <table className="min-w-full border-collapse border border-secondary-300 rounded-lg">
           {children}
         </table>
       </div>
     ),
-    thead: ({ children }: { children: React.ReactNode }) => (
+    thead: ({ children }: { children?: React.ReactNode }) => (
       <thead className="bg-secondary-100">{children}</thead>
     ),
-    tbody: ({ children }: { children: React.ReactNode }) => (
+    tbody: ({ children }: { children?: React.ReactNode }) => (
       <tbody>{children}</tbody>
     ),
-    tr: ({ children }: { children: React.ReactNode }) => (
+    tr: ({ children }: { children?: React.ReactNode }) => (
       <tr className="border-b border-secondary-200 hover:bg-secondary-50">{children}</tr>
     ),
-    th: ({ children }: { children: React.ReactNode }) => (
+    th: ({ children }: { children?: React.ReactNode }) => (
       <th className="px-4 py-3 text-left font-semibold text-secondary-900 border border-secondary-300">
         {children}
       </th>
     ),
-    td: ({ children }: { children: React.ReactNode }) => (
+    td: ({ children }: { children?: React.ReactNode }) => (
       <td className="px-4 py-3 text-secondary-700 border border-secondary-300">
         {children}
       </td>
     ),
-    p: ({ children }: { children: React.ReactNode }) => (
+    p: ({ children }: { children?: React.ReactNode }) => (
       <p className="mb-4 leading-relaxed">{children}</p>
     ),
-    strong: ({ children }: { children: React.ReactNode }) => (
+    strong: ({ children }: { children?: React.ReactNode }) => (
       <strong className="font-semibold text-secondary-900">{children}</strong>
     ),
-    ul: ({ children }: { children: React.ReactNode }) => (
+    ul: ({ children }: { children?: React.ReactNode }) => (
       <ul className="list-disc list-inside mb-4 space-y-2">{children}</ul>
     ),
-    ol: ({ children }: { children: React.ReactNode }) => (
+    ol: ({ children }: { children?: React.ReactNode }) => (
       <ol className="list-decimal list-inside mb-4 space-y-2">{children}</ol>
     ),
-    li: ({ children }: { children: React.ReactNode }) => (
+    li: ({ children }: { children?: React.ReactNode }) => (
       <li className="ml-4">{children}</li>
     ),
-    code: ({ children, className }: { children: React.ReactNode; className?: string }) => {
+    code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
       const isInline = !className;
       return isInline ? (
         <code className="bg-secondary-100 px-1.5 py-0.5 rounded text-sm font-mono text-secondary-900">

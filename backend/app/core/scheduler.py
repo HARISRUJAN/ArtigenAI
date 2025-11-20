@@ -30,6 +30,8 @@ async def crawl_origin_job(origin_id: int):
     """
     Background job to crawl and ingest an origin.
     This is called by the scheduler.
+    
+    Enhanced error handling ensures one failing origin does not crash the scheduler.
     """
     db: Session = SessionLocal()
     try:
@@ -39,8 +41,28 @@ async def crawl_origin_job(origin_id: int):
             logger.info(f"Scheduled crawl completed successfully for origin {origin_id}")
         else:
             logger.warning(f"Scheduled crawl failed for origin {origin_id}: {result.message}")
+            # Status is already updated by scraping_service, but ensure it's committed
+            try:
+                db.commit()
+            except Exception:
+                pass
     except Exception as e:
-        logger.exception(f"Error in scheduled crawl job for origin {origin_id}: {str(e)}")
+        # Catch all exceptions to prevent one failing origin from crashing the scheduler
+        error_msg = f"Unexpected error in scheduled crawl job for origin {origin_id}: {str(e)}"
+        logger.exception(error_msg)
+        
+        # Try to update origin status even on unexpected errors
+        try:
+            from app.models.database import ScrapingOrigin
+            from datetime import datetime
+            origin = db.query(ScrapingOrigin).filter(ScrapingOrigin.id == origin_id).first()
+            if origin:
+                origin.last_run = datetime.utcnow()
+                origin.last_status = f"failed: {error_msg[:200]}"  # Truncate long errors
+                db.commit()
+        except Exception as update_error:
+            logger.error(f"Failed to update origin status after error: {update_error}")
+            db.rollback()
     finally:
         db.close()
 

@@ -42,7 +42,7 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(content.router, prefix="/api/content", tags=["content"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
-app.include_router(crawl.router, prefix="/api", tags=["crawl"])
+app.include_router(crawl.router, prefix="/api/crawl", tags=["crawl"])
 
 
 @app.on_event("startup")
