@@ -59,9 +59,15 @@ The AI Governance Literacy Platform provides an intelligent question-answering s
 
 ## Prerequisites
 
+### Local Development
 - **Docker** 20.10+ and **Docker Compose** 2.0+ (recommended)
 - OR **Python** 3.11+ and **Node.js** 18+ (for local development)
 - **Qdrant** (local or cloud instance)
+
+### Azure Deployment
+- **Azure Account** with active subscription
+- **GitHub Repository** with Actions enabled
+- **Azure Web App** resource (App Service for Containers)
 
 ## Quick Start
 
@@ -278,7 +284,31 @@ Full API documentation available at `/docs` when the backend is running.
 
 ## Production Deployment
 
+### Azure Web App (Recommended)
+
+The application is configured for deployment to **Azure Web App Service (App Service for Containers)** using GitHub Actions.
+
+**Quick Deploy:**
+
+1. **Set up GitHub Secrets:**
+   - `AZURE_CREDENTIALS`: Azure service principal JSON
+   - `AZURE_WEBAPP_NAME`: Your Azure Web App name
+
+2. **Configure Azure Web App:**
+   - Create Azure Web App resource (App Service for Containers)
+   - Set environment variables in Azure Portal
+   - Configure container registry (GitHub Container Registry)
+
+3. **Deploy:**
+   - Push to `Version-0.1` branch (or your configured branch)
+   - GitHub Actions will automatically build and deploy
+
+**For detailed Azure deployment instructions, see [DEPLOYMENT.md](DEPLOYMENT.md#azure-web-app-deployment).**
+
+### Other Deployment Options
+
 For production deployment supporting 10,000+ users, see [DEPLOYMENT.md](DEPLOYMENT.md) for:
+- Docker Compose deployment
 - Scaling considerations
 - Database migration to PostgreSQL
 - Load balancing setup
@@ -328,8 +358,12 @@ aigov/
 │   │   └── hooks/       # React hooks
 │   ├── Dockerfile       # Frontend container definition
 │   └── package.json     # Node dependencies
-├── docker-compose.yml   # Container orchestration
-└── README.md           # This file
+├── docker-compose.yml              # Container orchestration
+├── .github/
+│   └── workflows/
+│       └── azure-webapp-deploy.yml # Azure deployment workflow
+├── DEPLOYMENT.md                   # Production deployment guide
+└── README.md                       # This file
 ```
 
 ## Contributing

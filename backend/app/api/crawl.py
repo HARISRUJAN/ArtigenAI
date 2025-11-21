@@ -77,11 +77,12 @@ async def _process_query_crawl_job(
         logger.info(f"Job {job_id}: Starting query-seeded crawl for query='{query}' (triggered by {triggered_by})")
         
         # Run the query-seeded crawl
+        from app.core.config import settings
         results = await hybrid_crawler.crawl_query_seeded(
             query=query,
             top_k=top_k,
             max_depth=max_depth,
-            max_pages=30  # Use default from config
+            max_pages=getattr(settings, 'crawl_max_pages_per_run', 30)
         )
         
         if not results:
@@ -143,12 +144,23 @@ async def _process_query_crawl_job(
             origin_id=None  # No origin for query-seeded crawls
         )
         
+        # Count policy-relevant pages
+        policy_relevant_pages = 0
+        for result in results:
+            if result.get("metadata", {}).get("relevance_score", 0) >= 3:
+                policy_relevant_pages += 1
+        
         _job_status[job_id] = {
             "status": "completed",
             "completed_at": datetime.utcnow().isoformat(),
             "pages_crawled": len(results),
+            "pages_attempted": len(results),
+            "pages_succeeded": len(results),
+            "policy_relevant_pages": policy_relevant_pages,
             "document_id": db_document.id,
-            "content_length": len(combined_content)
+            "content_length": len(combined_content),
+            "mode": "query",
+            "triggered_by": triggered_by
         }
         
         logger.info(f"Job {job_id}: Successfully completed query-seeded crawl. Document ID: {db_document.id}, {len(results)} pages")
@@ -252,12 +264,23 @@ async def _process_domain_crawl_job(
             origin_id=None  # No origin for domain-seeded crawls
         )
         
+        # Count policy-relevant pages
+        policy_relevant_pages = 0
+        for result in results:
+            if result.get("metadata", {}).get("relevance_score", 0) >= 3:
+                policy_relevant_pages += 1
+        
         _job_status[job_id] = {
             "status": "completed",
             "completed_at": datetime.utcnow().isoformat(),
             "pages_crawled": len(results),
+            "pages_attempted": len(results),
+            "pages_succeeded": len(results),
+            "policy_relevant_pages": policy_relevant_pages,
             "document_id": db_document.id,
-            "content_length": len(combined_content)
+            "content_length": len(combined_content),
+            "mode": "domain",
+            "triggered_by": triggered_by
         }
         
         logger.info(f"Job {job_id}: Successfully completed domain-seeded crawl. Document ID: {db_document.id}, {len(results)} pages")

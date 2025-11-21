@@ -13,9 +13,12 @@ if sys.platform.startswith("win"):
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.models.database import init_db
 from app.core.scheduler import initialize_scheduler, shutdown_scheduler
+import os
 
 # Initialize database
 init_db()
@@ -36,13 +39,42 @@ app.add_middleware(
 )
 
 # Import routers
-from app.api import auth, content, search, admin, crawl
+from app.api import auth, content, search, admin, crawl, dashboard
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(content.router, prefix="/api/content", tags=["content"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(crawl.router, prefix="/api/crawl", tags=["crawl"])
+app.include_router(dashboard.router, prefix="/api/admin/dashboard", tags=["dashboard"])
+
+# Serve static files (frontend) if they exist
+# This is used in production when frontend is built into the container
+static_dir = os.path.join(os.path.dirname(__file__), "..", "static")
+if os.path.exists(static_dir):
+    # Mount static assets (JS, CSS, images, etc.)
+    assets_dir = os.path.join(static_dir, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+    
+    # Serve index.html for SPA routing (must be after API routes)
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """
+        Serve the React SPA for all non-API routes.
+        This enables client-side routing for the frontend.
+        """
+        # Don't serve index.html for API routes or assets
+        if full_path.startswith("api") or full_path.startswith("assets"):
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        else:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Frontend not found")
 
 
 @app.on_event("startup")
@@ -96,6 +128,13 @@ async def shutdown_event():
 
 @app.get("/")
 async def root():
+    """
+    Root endpoint. In production with static files, this serves the frontend.
+    If static files don't exist (development), return API info.
+    """
+    index_path = os.path.join(static_dir, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
     return {"message": "AI Governance Literacy Platform API"}
 
 

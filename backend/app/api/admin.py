@@ -22,8 +22,56 @@ async def list_origins(
     current_user = Depends(get_current_active_admin)
 ):
     """List all scraping origins"""
+    import json
     origins = db.query(ScrapingOrigin).all()
-    return origins
+    
+    # Convert JSON strings back to lists for response
+    result = []
+    for origin in origins:
+        origin_dict = {
+            "id": origin.id,
+            "name": origin.name,
+            "url": origin.url,
+            "frequency_hours": origin.frequency_hours,
+            "enabled": origin.enabled,
+            "last_run": origin.last_run,
+            "last_status": origin.last_status,
+            "qdrant_status": origin.qdrant_status,
+            "created_at": origin.created_at,
+            "updated_at": origin.updated_at,
+            "country_code": origin.country_code,
+            "crawl_priority": origin.crawl_priority,
+            "sitemap_url": origin.sitemap_url,
+        }
+        
+        # Parse JSON strings to lists
+        if origin.topic_tags:
+            try:
+                origin_dict["topic_tags"] = json.loads(origin.topic_tags)
+            except:
+                origin_dict["topic_tags"] = None
+        else:
+            origin_dict["topic_tags"] = None
+            
+        if origin.allowed_path_patterns:
+            try:
+                origin_dict["allowed_path_patterns"] = json.loads(origin.allowed_path_patterns)
+            except:
+                origin_dict["allowed_path_patterns"] = None
+        else:
+            origin_dict["allowed_path_patterns"] = None
+            
+        if origin.excluded_path_patterns:
+            try:
+                origin_dict["excluded_path_patterns"] = json.loads(origin.excluded_path_patterns)
+            except:
+                origin_dict["excluded_path_patterns"] = None
+        else:
+            origin_dict["excluded_path_patterns"] = None
+        
+        result.append(ScrapingOriginResponse(**origin_dict))
+    
+    return result
 
 
 @router.post("/origins", response_model=ScrapingOriginResponse, status_code=status.HTTP_201_CREATED)
@@ -33,7 +81,18 @@ async def create_origin(
     current_user = Depends(get_current_active_admin)
 ):
     """Create a new scraping origin"""
-    db_origin = ScrapingOrigin(**origin.dict())
+    import json
+    origin_dict = origin.dict()
+    
+    # Convert list fields to JSON strings for database storage
+    if origin_dict.get("topic_tags"):
+        origin_dict["topic_tags"] = json.dumps(origin_dict["topic_tags"])
+    if origin_dict.get("allowed_path_patterns"):
+        origin_dict["allowed_path_patterns"] = json.dumps(origin_dict["allowed_path_patterns"])
+    if origin_dict.get("excluded_path_patterns"):
+        origin_dict["excluded_path_patterns"] = json.dumps(origin_dict["excluded_path_patterns"])
+    
+    db_origin = ScrapingOrigin(**origin_dict)
     db.add(db_origin)
     db.commit()
     db.refresh(db_origin)
@@ -53,6 +112,7 @@ async def update_origin(
     current_user = Depends(get_current_active_admin)
 ):
     """Update a scraping origin"""
+    import json
     db_origin = db.query(ScrapingOrigin).filter(ScrapingOrigin.id == origin_id).first()
     if not db_origin:
         raise HTTPException(
@@ -61,6 +121,15 @@ async def update_origin(
         )
     
     update_data = origin_update.dict(exclude_unset=True)
+    
+    # Convert list fields to JSON strings for database storage
+    if "topic_tags" in update_data and update_data["topic_tags"] is not None:
+        update_data["topic_tags"] = json.dumps(update_data["topic_tags"])
+    if "allowed_path_patterns" in update_data and update_data["allowed_path_patterns"] is not None:
+        update_data["allowed_path_patterns"] = json.dumps(update_data["allowed_path_patterns"])
+    if "excluded_path_patterns" in update_data and update_data["excluded_path_patterns"] is not None:
+        update_data["excluded_path_patterns"] = json.dumps(update_data["excluded_path_patterns"])
+    
     for field, value in update_data.items():
         setattr(db_origin, field, value)
     

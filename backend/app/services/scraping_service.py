@@ -118,17 +118,48 @@ class ScrapingService:
             # Get crawl configuration from settings
             from app.core.config import settings
             from app.services.crawling_service import crawl_multi_page
+            import json
             
-            # Use multi-page crawler with configured limits
+            # Use origin-specific settings if available, otherwise use global settings
             max_depth = settings.crawl_max_depth
             max_pages = settings.crawl_max_pages_per_run
+            
+            # Override max_pages if origin has crawl_priority set
+            if origin.crawl_priority is not None:
+                # Scale max_pages based on priority (1-10 scale)
+                # Priority 10 = 2x default, Priority 1 = 0.5x default
+                priority_multiplier = origin.crawl_priority / 5.0  # Normalize to 5.0
+                max_pages = int(max_pages * priority_multiplier)
+                max_pages = max(10, min(max_pages, 200))  # Clamp between 10 and 200
+            
+            # Parse origin-specific path patterns
+            allowed_paths = None
+            excluded_paths = None
+            
+            if origin.allowed_path_patterns:
+                try:
+                    allowed_paths = json.loads(origin.allowed_path_patterns)
+                except:
+                    logger.warning(f"Failed to parse allowed_path_patterns for origin {origin.id}, using global settings")
+                    allowed_paths = settings.crawl_allowed_paths if settings.crawl_allowed_paths else None
+            else:
+                allowed_paths = settings.crawl_allowed_paths if settings.crawl_allowed_paths else None
+            
+            if origin.excluded_path_patterns:
+                try:
+                    excluded_paths = json.loads(origin.excluded_path_patterns)
+                except:
+                    logger.warning(f"Failed to parse excluded_path_patterns for origin {origin.id}, using global settings")
+                    excluded_paths = settings.crawl_excluded_paths if settings.crawl_excluded_paths else None
+            else:
+                excluded_paths = settings.crawl_excluded_paths if settings.crawl_excluded_paths else None
             
             crawl_results = await crawl_multi_page(
                 start_urls=[origin.url],
                 max_depth=max_depth,
                 max_pages=max_pages,
-                allowed_paths=settings.crawl_allowed_paths if settings.crawl_allowed_paths else None,
-                excluded_paths=settings.crawl_excluded_paths if settings.crawl_excluded_paths else None,
+                allowed_paths=allowed_paths,
+                excluded_paths=excluded_paths,
                 same_domain_only=True,  # Domain-seeded mode for origins
                 base_domain=None  # Will be determined from origin.url
             )

@@ -8,6 +8,11 @@ import { AdminLogin } from './pages/Admin/Login';
 import { AdminDashboard } from './pages/Admin/Dashboard';
 import { Health } from './pages/Admin/Health';
 import { Monitor } from './pages/Admin/Monitor';
+import { DashboardOverview } from './pages/Admin/Dashboard/Overview';
+import { DashboardOrigins } from './pages/Admin/Dashboard/Origins';
+import { DashboardJobs } from './pages/Admin/Dashboard/Jobs';
+import { DashboardDocuments } from './pages/Admin/Dashboard/Documents';
+import { DashboardSettings } from './pages/Admin/Dashboard/Settings';
 import { Sidebar } from './components/Navigation';
 import './index.css';
 
@@ -42,9 +47,14 @@ const AdminLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   }
   
   const navItems = [
-    { label: 'Monitor', path: '/admin/monitor' },
-    { label: 'Dashboard', path: '/admin/dashboard' },
+    { label: 'Overview', path: '/admin/dashboard/overview' },
+    { label: 'Origins', path: '/admin/dashboard/origins' },
+    { label: 'Jobs', path: '/admin/dashboard/jobs' },
+    { label: 'Documents', path: '/admin/dashboard/documents' },
+    { label: 'Settings', path: '/admin/dashboard/settings' },
+    { label: 'Legacy Dashboard', path: '/admin/dashboard' },
     { label: 'Health', path: '/admin/health' },
+    { label: 'Monitor', path: '/admin/monitor' },
   ];
   
   return (
@@ -59,7 +69,12 @@ function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
-        <BrowserRouter>
+        <BrowserRouter
+          future={{
+            v7_startTransition: true,
+            v7_relativeSplatPath: true,
+          }}
+        >
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route path="/ask" element={<AskAI />} />
@@ -72,6 +87,56 @@ function App() {
                 <ProtectedRoute>
                   <AdminLayout>
                     <AdminDashboard />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/dashboard/overview"
+              element={
+                <ProtectedRoute>
+                  <AdminLayout>
+                    <DashboardOverview />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/dashboard/origins"
+              element={
+                <ProtectedRoute>
+                  <AdminLayout>
+                    <DashboardOrigins />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/dashboard/jobs"
+              element={
+                <ProtectedRoute>
+                  <AdminLayout>
+                    <DashboardJobs />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/dashboard/documents"
+              element={
+                <ProtectedRoute>
+                  <AdminLayout>
+                    <DashboardDocuments />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/dashboard/settings"
+              element={
+                <ProtectedRoute>
+                  <AdminLayout>
+                    <DashboardSettings />
                   </AdminLayout>
                 </ProtectedRoute>
               }

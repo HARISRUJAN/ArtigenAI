@@ -31,7 +31,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         try {
           const userData = await authAPI.getMe();
           setUser(userData);
-        } catch (error) {
+        } catch (error: any) {
+          // Silently handle 401 errors (user not logged in)
+          if (error?.response?.status !== 401) {
+            console.error('Auth check error:', error);
+          }
           localStorage.removeItem('auth_token');
         }
       }

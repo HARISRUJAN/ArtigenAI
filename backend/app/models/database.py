@@ -41,6 +41,14 @@ class ScrapingOrigin(Base):
     qdrant_status = Column(String, nullable=True)  # "success" or "failed" with optional error message
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Enhanced metadata fields (all nullable for backward compatibility)
+    country_code = Column(String, nullable=True)  # ISO codes: "US", "EU", "UK", etc.
+    topic_tags = Column(Text, nullable=True)  # JSON array: ["ai_governance", "risk_management"]
+    crawl_priority = Column(Integer, nullable=True, default=5)  # 1-10 scale, default: 5
+    allowed_path_patterns = Column(Text, nullable=True)  # JSON array of regex patterns
+    excluded_path_patterns = Column(Text, nullable=True)  # JSON array of regex patterns
+    sitemap_url = Column(String, nullable=True)  # Optional sitemap URL for efficient discovery
 
 
 class Document(Base):

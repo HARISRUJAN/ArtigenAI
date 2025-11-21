@@ -40,21 +40,81 @@ async def query_rag(
                     detail=f"Error retrieving information: {str(chunk_error)}"
                 )
         
-        if not chunks:
+        # Check if web fallback is needed
+        from app.core.config import settings
+        from app.services.realtime_web_service import requires_freshness, realtime_web_service
+        
+        enable_realtime_web = getattr(settings, 'enable_realtime_web', False)
+        min_similarity_threshold = getattr(settings, 'min_similarity_threshold', 0.6)
+        min_results = getattr(settings, 'min_results', 3)
+        
+        web_chunks = []
+        should_use_web = False
+        
+        if enable_realtime_web and query.use_web_fallback:
+            # Check if web fallback should be triggered
+            top_score = chunks[0].get("score", 0.0) if chunks else 0.0
+            needs_freshness = requires_freshness(query.question)
+            
+            if (not chunks or len(chunks) < min_results or 
+                top_score < min_similarity_threshold or needs_freshness):
+                should_use_web = True
+                logger.info(f"Triggering web fallback for query: {question_safe[:100]}... (chunks={len(chunks)}, score={top_score:.2f}, freshness={needs_freshness})")
+        
+        # Fetch fresh web content if needed
+        if should_use_web:
+            try:
+                web_max_pages = getattr(settings, 'realtime_web_max_pages', 10)
+                web_max_seconds = getattr(settings, 'realtime_web_max_seconds', 5.0)
+                
+                web_results = await realtime_web_service.fetch_fresh_content(
+                    query=query.question,
+                    max_pages=web_max_pages,
+                    max_depth=1,
+                    max_seconds=web_max_seconds
+                )
+                
+                # Convert web crawl results to chunk format for RAG
+                for result in web_results:
+                    markdown = result.get("markdown", "")
+                    if markdown:
+                        # Create a chunk-like dict from web result
+                        web_chunks.append({
+                            "content": markdown[:2000],  # Limit length
+                            "document_title": result.get("metadata", {}).get("title", "Web Result"),
+                            "document_source": "Web (Live)",
+                            "document_url": result.get("url"),
+                            "chunk_index": 0,
+                            "score": 0.7,  # Default score for web results
+                            "metadata": {
+                                "source_type": "web_live",
+                                "fetched_at": result.get("metadata", {}).get("fetched_at")
+                            }
+                        })
+                
+                logger.info(f"Fetched {len(web_chunks)} web chunks for query")
+                
+            except Exception as web_error:
+                logger.warning(f"Web fallback failed: {web_error}, continuing with local results only")
+        
+        # Merge local and web chunks (local first, web supplements)
+        all_chunks = chunks + web_chunks
+        
+        if not all_chunks:
             logger.warning(f"No relevant chunks found for query: {question_safe}...")
             return RAGResponse(
                 answer="I couldn't find relevant information to answer your question. This could mean:\n1. No documents have been ingested yet - please ingest some documents first.\n2. The question doesn't match any content in the knowledge base - try rephrasing or asking about a different topic.",
                 citations=[]
             )
         
-        logger.info(f"Retrieved {len(chunks)} relevant chunks, generating answer...")
+        logger.info(f"Retrieved {len(chunks)} local chunks, {len(web_chunks)} web chunks, generating answer...")
         
         # Initialize answer variable
         answer = None
         
-        # Generate answer with error handling
+        # Generate answer with error handling (use all chunks: local + web)
         try:
-            answer = rag_service.generate_answer(query.question, chunks)
+            answer = rag_service.generate_answer(query.question, all_chunks)
             
             # Additional safety check: ensure answer doesn't contain code errors
             if answer and ("current_date" in answer.lower() or "is not defined" in answer.lower()):
@@ -91,10 +151,10 @@ async def query_rag(
             logger.warning("Answer is empty or None, using fallback message")
             answer = "I apologize, but I encountered an issue generating a proper response. Please try again or rephrasing your question."
         
-        # Format citations with error handling
+        # Format citations with error handling (include both local and web chunks)
         citations = []
         try:
-            for chunk in chunks:
+            for chunk in all_chunks:
                 try:
                     citations.append(DocumentChunk(
                         content=chunk.get("content", ""),

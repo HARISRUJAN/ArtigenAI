@@ -26,16 +26,20 @@ class SearchClient:
         self.google_search_api_key = getattr(settings, 'google_search_api_key', '')
         self.google_search_engine_id = getattr(settings, 'google_search_engine_id', '')
     
-    async def get_seed_urls(self, query: str, top_k: int = 10) -> List[str]:
+    async def get_seed_urls(self, query: str, top_k: int = 10) -> List[dict]:
         """
-        Get seed URLs from a search query.
+        Get seed URLs from a search query with metadata.
         
         Args:
             query: Natural language search query (e.g., "EU AI Act high-risk obligations")
             top_k: Number of URLs to return (default: 10)
             
         Returns:
-            List of URL strings from search results
+            List of dictionaries with:
+            - url: URL string
+            - title: Optional page title from search results
+            - snippet: Optional snippet from search results
+            - search_engine: Provider name ("perplexity" or "google")
         """
         if self.provider == 'perplexity' and self.perplexity_api_key:
             return await self._get_perplexity_urls(query, top_k)
@@ -45,16 +49,16 @@ class SearchClient:
             logger.warning(f"Search API not configured (provider={self.provider}). Returning empty list.")
             return []
     
-    async def _get_perplexity_urls(self, query: str, top_k: int) -> List[str]:
+    async def _get_perplexity_urls(self, query: str, top_k: int) -> List[dict]:
         """
-        Get URLs from Perplexity API.
+        Get URLs from Perplexity API with metadata.
         
         Args:
             query: Search query
             top_k: Number of URLs to return
             
         Returns:
-            List of URLs
+            List of dictionaries with url, title, snippet, search_engine
         """
         try:
             url = "https://api.perplexity.ai/chat/completions"
@@ -67,11 +71,11 @@ class SearchClient:
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are a helpful assistant that extracts URLs from search results. Return only a JSON array of URLs, nothing else."
+                        "content": "You are a helpful assistant that extracts URLs with titles and snippets from search results. Return a JSON array of objects with 'url', 'title', and 'snippet' fields."
                     },
                     {
                         "role": "user",
-                        "content": f"Search for: {query}. Return the top {top_k} authoritative URLs as a JSON array of strings."
+                        "content": f"Search for: {query}. Return the top {top_k} authoritative URLs with their titles and snippets as a JSON array of objects."
                     }
                 ],
                 "max_tokens": 2000,
@@ -84,10 +88,43 @@ class SearchClient:
                         data = await response.json()
                         content = data.get('choices', [{}])[0].get('message', {}).get('content', '')
                         
-                        # Try to extract URLs from the response
-                        # Perplexity may return URLs in various formats
+                        # Try to parse as JSON array of objects
+                        import json
+                        try:
+                            parsed = json.loads(content)
+                            if isinstance(parsed, list):
+                                results = []
+                                for item in parsed[:top_k]:
+                                    if isinstance(item, dict) and item.get('url'):
+                                        results.append({
+                                            "url": item.get('url', ''),
+                                            "title": item.get('title'),
+                                            "snippet": item.get('snippet'),
+                                            "search_engine": "perplexity"
+                                        })
+                                    elif isinstance(item, str) and item.startswith(('http://', 'https://')):
+                                        # Fallback: just URL string
+                                        results.append({
+                                            "url": item,
+                                            "title": None,
+                                            "snippet": None,
+                                            "search_engine": "perplexity"
+                                        })
+                                return results
+                        except:
+                            pass
+                        
+                        # Fallback: extract URLs from text
                         urls = self._extract_urls_from_text(content)
-                        return urls[:top_k]
+                        return [
+                            {
+                                "url": url_str,
+                                "title": None,
+                                "snippet": None,
+                                "search_engine": "perplexity"
+                            }
+                            for url_str in urls[:top_k]
+                        ]
                     else:
                         error_text = await response.text()
                         logger.error(f"Perplexity API error (status {response.status}): {error_text}")
@@ -97,16 +134,16 @@ class SearchClient:
             logger.error(f"Error calling Perplexity API: {e}")
             return []
     
-    async def _get_google_urls(self, query: str, top_k: int) -> List[str]:
+    async def _get_google_urls(self, query: str, top_k: int) -> List[dict]:
         """
-        Get URLs from Google Custom Search API.
+        Get URLs from Google Custom Search API with metadata.
         
         Args:
             query: Search query
             top_k: Number of URLs to return
             
         Returns:
-            List of URLs
+            List of dictionaries with url, title, snippet, search_engine
         """
         try:
             url = "https://www.googleapis.com/customsearch/v1"
@@ -117,14 +154,21 @@ class SearchClient:
                 "num": min(top_k, 10)  # Google API max is 10 per request
             }
             
-            urls = []
+            results = []
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=30)) as response:
                     if response.status == 200:
                         data = await response.json()
                         items = data.get('items', [])
-                        urls = [item.get('link', '') for item in items if item.get('link')]
-                        return urls[:top_k]
+                        for item in items[:top_k]:
+                            if item.get('link'):
+                                results.append({
+                                    "url": item.get('link', ''),
+                                    "title": item.get('title'),
+                                    "snippet": item.get('snippet'),
+                                    "search_engine": "google"
+                                })
+                        return results
                     else:
                         error_text = await response.text()
                         logger.error(f"Google Search API error (status {response.status}): {error_text}")

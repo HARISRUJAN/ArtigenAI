@@ -54,14 +54,25 @@ class HybridCrawler:
         """
         logger.info(f"Starting query-seeded crawl: query='{query}', top_k={top_k}, max_depth={max_depth}, max_pages={max_pages}")
         
-        # Get seed URLs from search API
-        seed_urls = await self.search_client.get_seed_urls(query, top_k=top_k)
+        # Get seed URLs with metadata from search API
+        seed_results = await self.search_client.get_seed_urls(query, top_k=top_k)
         
-        if not seed_urls:
+        if not seed_results:
             logger.warning(f"No seed URLs found for query: {query}")
             return []
         
-        logger.info(f"Found {len(seed_urls)} seed URLs from search API")
+        logger.info(f"Found {len(seed_results)} seed URLs from search API")
+        
+        # Extract URLs and metadata for crawl_multi_page
+        seed_urls = [item["url"] for item in seed_results]
+        seed_metadata = [
+            {
+                "title": item.get("title"),
+                "snippet": item.get("snippet"),
+                "search_engine": item.get("search_engine", "unknown")
+            }
+            for item in seed_results
+        ]
         
         # Use default path filters if not provided
         if allowed_paths is None:
@@ -78,13 +89,21 @@ class HybridCrawler:
             allowed_paths=allowed_paths,
             excluded_paths=excluded_paths,
             same_domain_only=False,  # Allow cross-domain for query-seeded
-            base_domain=None
+            base_domain=None,
+            seed_metadata=seed_metadata
         )
         
         # Add metadata to all results
         for result in results:
             result["metadata"]["source_query"] = query
             result["metadata"]["mode"] = "query"
+            # Preserve search engine info if available
+            if "search_engine" not in result["metadata"]:
+                # Try to get from seed metadata
+                for seed_meta in seed_metadata:
+                    if seed_meta.get("url") == result.get("url"):
+                        result["metadata"]["search_engine"] = seed_meta.get("search_engine")
+                        break
         
         logger.info(f"Query-seeded crawl completed: {len(results)} pages crawled")
         return results

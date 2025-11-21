@@ -805,10 +805,11 @@ async def crawl_multi_page(
     allowed_paths: Optional[List[str]] = None,
     excluded_paths: Optional[List[str]] = None,
     same_domain_only: bool = True,
-    base_domain: Optional[str] = None
+    base_domain: Optional[str] = None,
+    seed_metadata: Optional[List[Dict]] = None
 ) -> List[Dict]:
     """
-    Crawl multiple pages using BFS-style traversal with depth limits.
+    Crawl multiple pages using BFS-style or priority-based traversal with depth limits.
     
     Args:
         start_urls: List of starting URLs to crawl
@@ -818,15 +819,29 @@ async def crawl_multi_page(
         excluded_paths: List of regex patterns for excluded paths
         same_domain_only: If True, only follow links from same domain
         base_domain: Base domain to restrict crawling to (if same_domain_only=True)
+        seed_metadata: Optional list of metadata dicts for seed URLs (for title/snippet from search)
         
     Returns:
         List of crawl result dictionaries (one per page)
     """
     from app.core.config import settings
     from app.services.robots import RobotsChecker
+    from app.services.url_scorer import score_url
+    from app.services.topic_filter import PolicyRelevanceScorer, ContentQualityFilter
+    
+    # Check if priority queue and topic filtering are enabled
+    use_priority = getattr(settings, 'enable_priority_queue', False)
+    use_topic_filter = getattr(settings, 'enable_topic_filtering', False)
+    priority_threshold = getattr(settings, 'priority_score_threshold', -10.0)
+    max_low_priority = getattr(settings, 'max_low_priority_pages', 10)
+    policy_threshold = getattr(settings, 'policy_keyword_threshold', 3)
+    
+    # Initialize topic filter if enabled
+    relevance_scorer = PolicyRelevanceScorer(threshold=policy_threshold) if use_topic_filter else None
+    quality_filter = ContentQualityFilter() if use_topic_filter else None
     
     results = []
-    queue = URLQueue()
+    queue = URLQueue(use_priority=use_priority)
     seen_content_hashes = set()
     robots_checker = RobotsChecker(user_agent=getattr(settings, 'crawl_user_agent', 'aigov-crawler/1.0'))
     respect_robots = getattr(settings, 'crawl_respect_robots_txt', True)
@@ -837,14 +852,28 @@ async def crawl_multi_page(
         parsed = urlparse(start_urls[0])
         base_domain = parsed.netloc.lower()
     
-    # Enqueue starting URLs
-    for start_url in start_urls:
-        queue.push(start_url, depth=0, metadata={"is_seed": True})
+    # Enqueue starting URLs with priority scoring if enabled
+    for idx, start_url in enumerate(start_urls):
+        seed_meta = seed_metadata[idx] if seed_metadata and idx < len(seed_metadata) else {}
+        metadata = {"is_seed": True, **seed_meta}
+        
+        if use_priority:
+            # Score seed URLs
+            priority = score_url(
+                start_url,
+                source_domain=base_domain,
+                title=seed_meta.get("title"),
+                snippet=seed_meta.get("snippet")
+            )
+            queue.push(start_url, depth=0, priority=priority, metadata=metadata)
+        else:
+            queue.push(start_url, depth=0, metadata=metadata)
     
     pages_crawled = 0
     pages_failed = 0
+    low_priority_pages = 0
     
-    # BFS traversal
+    # Traversal (BFS or priority-based)
     while not queue.empty() and pages_crawled < max_pages:
         item = queue.pop()
         if item is None:
@@ -868,6 +897,16 @@ async def crawl_multi_page(
         if pages_crawled > 0:
             await asyncio.sleep(crawl_delay)
         
+        # Check priority threshold if using priority queue
+        if use_priority:
+            # Score URL to check if it meets threshold
+            url_priority = score_url(url, source_domain=base_domain)
+            if url_priority < priority_threshold:
+                if low_priority_pages >= max_low_priority:
+                    logger.debug(f"Skipping low-priority URL: {url} (score: {url_priority:.2f})")
+                    continue
+                low_priority_pages += 1
+        
         # Crawl the URL
         logger.info(f"Crawling {url} (depth={depth}, page={pages_crawled + 1}/{max_pages})")
         crawl_result = await crawl_url_with_retry(
@@ -882,11 +921,64 @@ async def crawl_multi_page(
             # Continue with next URL even if this one failed
             continue
         
+        # Apply topic filtering if enabled
+        markdown_content = crawl_result.get("markdown", "")
+        if use_topic_filter and markdown_content:
+            # Check content quality
+            if quality_filter and not quality_filter.is_high_quality(markdown_content):
+                logger.debug(f"Skipping low-quality content: {url}")
+                # Still follow links from low-quality pages (exploratory budget)
+                if depth < max_depth:
+                    links = crawl_result.get("links", [])
+                    for link in links[:5]:  # Limit exploratory links
+                        parsed_link = urlparse(link)
+                        link_domain = parsed_link.netloc.lower()
+                        if same_domain_only and base_domain and link_domain != base_domain:
+                            continue
+                        link_path = parsed_link.path or "/"
+                        # Only enqueue policy-pattern links from low-quality pages
+                        if any(re.search(pattern, link_path) for pattern in [
+                            r'/legislation/', r'/regulation/', r'/policy/', r'/standards/'
+                        ]):
+                            if use_priority:
+                                priority = score_url(link, source_domain=base_domain)
+                                queue.push(link, depth=depth + 1, priority=priority, metadata={"parent_url": url})
+                            else:
+                                queue.push(link, depth=depth + 1, metadata={"parent_url": url})
+                continue
+            
+            # Check policy relevance
+            is_relevant, relevance_score = relevance_scorer.score(markdown_content)
+            if not is_relevant:
+                logger.debug(f"Skipping non-policy-relevant content: {url} (score: {relevance_score:.1f})")
+                # Still follow some links from borderline pages (exploratory budget)
+                if depth < max_depth and relevance_score >= policy_threshold - 1:
+                    links = crawl_result.get("links", [])
+                    for link in links[:3]:  # Very limited exploratory links
+                        parsed_link = urlparse(link)
+                        link_domain = parsed_link.netloc.lower()
+                        if same_domain_only and base_domain and link_domain != base_domain:
+                            continue
+                        link_path = parsed_link.path or "/"
+                        # Only enqueue policy-pattern links
+                        if any(re.search(pattern, link_path) for pattern in [
+                            r'/legislation/', r'/regulation/', r'/policy/'
+                        ]):
+                            if use_priority:
+                                priority = score_url(link, source_domain=base_domain)
+                                queue.push(link, depth=depth + 1, priority=priority, metadata={"parent_url": url})
+                            else:
+                                queue.push(link, depth=depth + 1, metadata={"parent_url": url})
+                continue
+        
         pages_crawled += 1
         
         # Add to results
         crawl_result["depth"] = depth
         crawl_result["metadata"].update(metadata)
+        if use_topic_filter and markdown_content:
+            _, relevance_score = relevance_scorer.score(markdown_content)
+            crawl_result["metadata"]["relevance_score"] = relevance_score
         results.append(crawl_result)
         
         # Extract and enqueue links if we haven't reached max depth
@@ -932,7 +1024,12 @@ async def crawl_multi_page(
                         continue
                 
                 # Enqueue link for next depth level
-                queue.push(link, depth=depth + 1, metadata={"parent_url": url})
+                if use_priority:
+                    # Score link for priority
+                    priority = score_url(link, source_domain=base_domain)
+                    queue.push(link, depth=depth + 1, priority=priority, metadata={"parent_url": url})
+                else:
+                    queue.push(link, depth=depth + 1, metadata={"parent_url": url})
     
     logger.info(f"Multi-page crawl completed: {pages_crawled} pages crawled, {pages_failed} pages failed")
     

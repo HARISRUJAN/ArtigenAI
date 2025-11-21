@@ -128,6 +128,50 @@ class Settings(BaseSettings):
         description="Comma-separated list of URL path patterns to exclude (regex patterns). Common exclusions: /api/, /admin/, /login/, etc."
     )
     
+    # Focused Crawling Configuration
+    enable_priority_queue: bool = Field(
+        default=False,
+        description="Enable priority-based URL queue (higher priority URLs crawled first). Default: False (FIFO/BFS mode)"
+    )
+    enable_topic_filtering: bool = Field(
+        default=False,
+        description="Enable topic filtering to only ingest policy-relevant content. Default: False (ingest all content)"
+    )
+    policy_keyword_threshold: int = Field(
+        default=3,
+        description="Minimum number of policy keywords required for content to be considered relevant"
+    )
+    priority_score_threshold: float = Field(
+        default=-10.0,
+        description="Minimum priority score for URLs to be crawled (negative values allow low-priority URLs)"
+    )
+    max_low_priority_pages: int = Field(
+        default=10,
+        description="Maximum number of low-priority pages to crawl per run (prevents crawling too many low-score URLs)"
+    )
+    
+    # Real-Time Web Configuration
+    enable_realtime_web: bool = Field(
+        default=False,
+        description="Enable real-time web search fallback for RAG queries. Default: False (preserves existing behavior)"
+    )
+    realtime_web_max_seconds: float = Field(
+        default=5.0,
+        description="Maximum time budget in seconds for real-time web fetching"
+    )
+    realtime_web_max_pages: int = Field(
+        default=10,
+        description="Maximum number of pages to crawl for real-time web results"
+    )
+    min_similarity_threshold: float = Field(
+        default=0.6,
+        description="Minimum similarity score threshold for triggering web fallback"
+    )
+    min_results: int = Field(
+        default=3,
+        description="Minimum number of local results required to skip web fallback"
+    )
+    
     # Search API Configuration
     perplexity_api_key: str = Field(
         default="",

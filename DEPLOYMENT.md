@@ -2,6 +2,194 @@
 
 This guide covers deploying the AI Governance Literacy Platform for production use, supporting 10,000+ concurrent users.
 
+## Azure Web App Deployment
+
+The application is configured for deployment to Azure Web App Service (App Service for Containers) using GitHub Actions. This section covers the Azure-specific deployment setup.
+
+### Deployment Architecture
+
+- **Mode**: Single container deployment (backend + frontend)
+- **Container Registry**: GitHub Container Registry (ghcr.io)
+- **Frontend Handling**: Built into backend image, served as static files via FastAPI
+- **Port**: Dynamic (reads Azure PORT environment variable, defaults to 8000)
+
+### Prerequisites
+
+1. **Azure Account** with an active subscription
+2. **Azure Web App** resource created (App Service for Containers)
+3. **GitHub Repository** with Actions enabled
+4. **Azure Service Principal** for GitHub Actions authentication
+
+### Required GitHub Secrets
+
+Configure the following secrets in your GitHub repository (Settings → Secrets and variables → Actions):
+
+#### 1. AZURE_CREDENTIALS
+
+Azure service principal credentials in JSON format:
+
+```json
+{
+  "clientId": "<service-principal-client-id>",
+  "clientSecret": "<service-principal-secret>",
+  "subscriptionId": "<azure-subscription-id>",
+  "tenantId": "<azure-tenant-id>"
+}
+```
+
+**To create a service principal:**
+
+```bash
+# Login to Azure CLI
+az login
+
+# Create service principal (replace with your resource group and subscription)
+az ad sp create-for-rbac \
+  --name "aigov-github-actions" \
+  --role contributor \
+  --scopes /subscriptions/<subscription-id>/resourceGroups/<resource-group> \
+  --sdk-auth
+```
+
+Copy the JSON output and paste it as the `AZURE_CREDENTIALS` secret.
+
+#### 2. AZURE_WEBAPP_NAME
+
+The name of your Azure Web App resource (e.g., `aigov-webapp-prod`).
+
+**To find your Web App name:**
+- Azure Portal → App Services → Your Web App → Overview → Name
+
+#### 3. GITHUB_TOKEN (Automatic)
+
+This is automatically provided by GitHub Actions. No manual configuration needed.
+
+### Azure Web App Configuration
+
+#### 1. Create Azure Web App
+
+```bash
+# Create resource group (if not exists)
+az group create --name aigov-rg --location eastus
+
+# Create App Service Plan
+az appservice plan create \
+  --name aigov-plan \
+  --resource-group aigov-rg \
+  --sku B1 \
+  --is-linux
+
+# Create Web App for Containers
+az webapp create \
+  --name aigov-webapp-prod \
+  --resource-group aigov-rg \
+  --plan aigov-plan \
+  --deployment-container-image-name ghcr.io/OWNER/REPO/aigov-app:latest
+```
+
+#### 2. Configure Environment Variables
+
+In Azure Portal → Your Web App → Configuration → Application settings, add:
+
+- `DATABASE_URL`: PostgreSQL connection string (if using PostgreSQL)
+- `SECRET_KEY`: Application secret key
+- `GROQ_API_KEY`: Groq API key for LLM
+- `QDRANT_URL`: Qdrant vector database URL
+- `QDRANT_API_KEY`: Qdrant API key (if using Qdrant Cloud)
+- `CORS_ORIGINS`: Allowed CORS origins (comma-separated)
+- `ENVIRONMENT`: Set to `production`
+
+#### 3. Configure Container Settings
+
+In Azure Portal → Your Web App → Deployment Center:
+
+- **Source**: GitHub Actions (or Container Registry)
+- **Registry**: GitHub Container Registry (ghcr.io)
+- **Image**: `ghcr.io/OWNER/REPO/aigov-app:latest`
+- **Continuous Deployment**: Enable if you want auto-deploy on push
+
+#### 4. Configure Port
+
+Azure Web App automatically sets the `PORT` environment variable. The Dockerfile is configured to use this variable (defaults to 8000 if not set).
+
+### GitHub Actions Workflow
+
+The workflow file (`.github/workflows/azure-webapp-deploy.yml`) is configured to:
+
+1. **Trigger**: Push to `Version-0.1` branch (configurable)
+2. **Build**: Multi-stage Docker build (frontend + backend)
+3. **Push**: Image to GitHub Container Registry
+4. **Deploy**: Image to Azure Web App
+
+**To change the trigger branch:**
+
+Edit `.github/workflows/azure-webapp-deploy.yml`:
+
+```yaml
+on:
+  push:
+    branches:
+      - main  # Change to your main branch
+```
+
+### Building and Deploying Locally
+
+To test the Docker build locally:
+
+```bash
+# Build from repository root
+docker build -f backend/Dockerfile -t aigov-app:local .
+
+# Run locally
+docker run -p 8000:8000 \
+  -e DATABASE_URL="sqlite:///./aigov.db" \
+  -e SECRET_KEY="your-secret-key" \
+  aigov-app:local
+```
+
+### Troubleshooting
+
+#### Container fails to start
+
+1. Check Azure Web App logs: Portal → Your Web App → Log stream
+2. Verify environment variables are set correctly
+3. Ensure `PORT` environment variable is not manually set (Azure sets it automatically)
+
+#### Frontend not loading
+
+1. Verify frontend was built: Check Docker build logs for `npm run build`
+2. Check that `/app/static` directory exists in container
+3. Verify FastAPI is serving static files (check `backend/app/main.py`)
+
+#### API routes not working
+
+1. Ensure API routes are prefixed with `/api`
+2. Check CORS configuration in Azure Portal
+3. Verify backend is listening on the correct port
+
+### Monitoring
+
+- **Application Insights**: Enable in Azure Portal for application monitoring
+- **Log Stream**: Real-time logs in Azure Portal → Your Web App → Log stream
+- **Metrics**: View CPU, memory, and request metrics in Azure Portal
+
+### Cost Optimization
+
+- Use **B1** or **S1** plan for development/testing
+- Use **P1V2** or higher for production
+- Enable **Auto-scaling** based on CPU/memory metrics
+- Use **Azure Container Registry** instead of GitHub Container Registry if you have Azure credits
+
+### Next Steps
+
+After deployment:
+
+1. Configure custom domain (Azure Portal → Custom domains)
+2. Enable HTTPS (automatic with Azure App Service)
+3. Set up Application Insights for monitoring
+4. Configure backup and disaster recovery
+5. Set up staging slot for blue-green deployments
+
 ## Table of Contents
 
 1. [Prerequisites](#prerequisites)

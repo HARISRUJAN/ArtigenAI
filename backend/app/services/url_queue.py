@@ -1,10 +1,13 @@
 """
 URL Queue module for BFS-style crawling with depth tracking and URL deduplication.
+Supports both FIFO (BFS) and priority-based queue modes.
 """
 import logging
+import heapq
 from typing import Optional, Tuple, Dict, Set
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from collections import deque
+from itertools import count
 
 logger = logging.getLogger(__name__)
 
@@ -75,25 +78,40 @@ def canonicalize_url(url: str) -> str:
 
 class URLQueue:
     """
-    URL queue for BFS-style crawling with depth tracking and deduplication.
+    URL queue for BFS-style or priority-based crawling with depth tracking and deduplication.
     
     Maintains a queue of URLs to crawl, tracking depth and metadata for each URL.
     Uses canonicalized URLs for deduplication to avoid crawling the same page twice.
+    
+    Supports two modes:
+    - FIFO mode (default): BFS-style crawling, priority=0.0 for all URLs
+    - Priority mode: URLs with higher priority are crawled first
     """
     
-    def __init__(self):
-        """Initialize an empty URL queue."""
-        self._queue: deque = deque()  # Queue of (url, depth, metadata) tuples
+    def __init__(self, use_priority: bool = False):
+        """
+        Initialize an empty URL queue.
+        
+        Args:
+            use_priority: If True, use priority-based queue (heapq). If False, use FIFO (deque).
+        """
+        self.use_priority = use_priority
+        if use_priority:
+            self._queue = []  # heapq list: (negative_priority, counter, url, depth, metadata)
+            self._counter = count()  # For tie-breaking in priority queue
+        else:
+            self._queue: deque = deque()  # Queue of (url, depth, metadata) tuples
         self._seen_urls: Set[str] = set()  # Set of canonicalized URLs already seen
         self._depth_map: Dict[str, int] = {}  # Map of canonical URL to minimum depth found
     
-    def push(self, url: str, depth: int, metadata: Optional[Dict] = None) -> bool:
+    def push(self, url: str, depth: int, priority: float = 0.0, metadata: Optional[Dict] = None) -> bool:
         """
         Add a URL to the queue if it hasn't been seen before.
         
         Args:
             url: URL to add
             depth: Depth level (0 = seed URL, 1+ = discovered links)
+            priority: Priority score (higher = crawled first). Only used if use_priority=True.
             metadata: Optional metadata dict (source_query, root_domain, mode, etc.)
             
         Returns:
@@ -110,8 +128,14 @@ class URLQueue:
             self._depth_map[canonical] = min(self._depth_map.get(canonical, depth), depth)
             return False
         
-        # Add to queue
-        self._queue.append((url, depth, metadata or {}))
+        # Add to queue based on mode
+        if self.use_priority:
+            # Use negative priority for max-heap behavior (heapq is min-heap)
+            heapq.heappush(self._queue, (-priority, next(self._counter), url, depth, metadata or {}))
+        else:
+            # FIFO mode: ignore priority, use deque
+            self._queue.append((url, depth, metadata or {}))
+        
         self._seen_urls.add(canonical)
         self._depth_map[canonical] = depth
         
@@ -119,7 +143,10 @@ class URLQueue:
     
     def pop(self) -> Optional[Tuple[str, int, Dict]]:
         """
-        Get the next URL from the queue (BFS order).
+        Get the next URL from the queue.
+        
+        In FIFO mode: Returns URLs in BFS order (FIFO).
+        In priority mode: Returns highest priority URL first.
         
         Returns:
             Tuple of (url, depth, metadata) or None if queue is empty
@@ -127,7 +154,13 @@ class URLQueue:
         if not self._queue:
             return None
         
-        return self._queue.popleft()
+        if self.use_priority:
+            # Pop from heapq (highest priority first)
+            _, _, url, depth, metadata = heapq.heappop(self._queue)
+            return (url, depth, metadata)
+        else:
+            # Pop from deque (FIFO)
+            return self._queue.popleft()
     
     def has_seen(self, url: str) -> bool:
         """
@@ -149,6 +182,23 @@ class URLQueue:
     def empty(self) -> bool:
         """Check if the queue is empty."""
         return len(self._queue) == 0
+    
+    def switch_to_priority(self):
+        """
+        Switch from FIFO mode to priority mode.
+        Converts existing queue items to priority queue (all with priority=0.0).
+        """
+        if self.use_priority:
+            return  # Already in priority mode
+        
+        # Convert deque to heapq
+        self._counter = count()
+        priority_queue = []
+        for url, depth, metadata in self._queue:
+            heapq.heappush(priority_queue, (0.0, next(self._counter), url, depth, metadata))
+        
+        self._queue = priority_queue
+        self.use_priority = True
     
     def get_seen_count(self) -> int:
         """Get the number of unique URLs seen (including those already processed)."""
