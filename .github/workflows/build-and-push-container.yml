@@ -20,7 +20,8 @@ on:
 env:
   # GitHub Container Registry
   REGISTRY: ghcr.io
-  # Image name (will be: ghcr.io/OWNER/IMAGE_NAME)
+  # Image name: combines repository name (owner/repo) with app suffix
+  # Example: ghcr.io/harisrujan/artigenai/aigov-app
   IMAGE_NAME: ${{ github.repository }}/aigov-app
 
 jobs:

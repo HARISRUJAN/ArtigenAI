@@ -24,6 +24,11 @@ The workflow file `.github/workflows/build-and-push-container.yml` handles the a
 Once built and pushed, the container image will be available at:
 
 ```
+ghcr.io/{owner}/{repo}/aigov-app:<tag>
+```
+
+For this repository:
+```
 ghcr.io/harisrujan/artigenai/aigov-app:<tag>
 ```
 
@@ -37,6 +42,10 @@ Where `<tag>` can be:
 ### Pull the image
 
 ```bash
+# Generic format
+docker pull ghcr.io/{owner}/{repo}/aigov-app:latest
+
+# For this repository
 docker pull ghcr.io/harisrujan/artigenai/aigov-app:latest
 ```
 
@@ -81,8 +90,8 @@ These permissions are configured in the workflow file and are automatically gran
 
 By default, container images pushed to GHCR are private. To make them public:
 
-1. Go to https://github.com/users/HARISRUJAN/packages
-2. Find the `artigenai/aigov-app` package
+1. Go to https://github.com/users/{USERNAME}/packages (or your organization's packages page)
+2. Find the `{repo}/aigov-app` package
 3. Click "Package settings"
 4. Scroll to "Danger Zone" and change visibility to public
 
@@ -116,13 +125,13 @@ If you need to build and push manually:
 
 ```bash
 # Build the image from repository root
-docker build -f backend/Dockerfile -t ghcr.io/harisrujan/artigenai/aigov-app:manual .
+docker build -f backend/Dockerfile -t ghcr.io/{owner}/{repo}/aigov-app:manual .
 
-# Login to GHCR
-echo $GITHUB_TOKEN | docker login ghcr.io -u HARISRUJAN --password-stdin
+# Login to GHCR (replace {USERNAME} with your GitHub username)
+echo $GITHUB_TOKEN | docker login ghcr.io -u {USERNAME} --password-stdin
 
 # Push the image
-docker push ghcr.io/harisrujan/artigenai/aigov-app:manual
+docker push ghcr.io/{owner}/{repo}/aigov-app:manual
 ```
 
-Replace `$GITHUB_TOKEN` with a Personal Access Token (PAT) with `write:packages` permission.
+Replace `{owner}`, `{repo}`, and `{USERNAME}` with your actual values, and `$GITHUB_TOKEN` with a Personal Access Token (PAT) with `write:packages` permission.
