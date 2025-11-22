@@ -13,8 +13,8 @@ on:
 env:
   # GitHub Container Registry
   REGISTRY: ghcr.io
-  # Image name (will be: ghcr.io/OWNER/IMAGE_NAME)
-  IMAGE_NAME: ${{ github.repository }}/aigov-app
+  # Full image path for deployment (format: ghcr.io/OWNER/REPO/IMAGE_NAME)
+  IMAGE_PATH: ghcr.io/${{ github.repository }}/aigov-app
 
 jobs:
   build-and-deploy:
@@ -26,6 +26,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Generate short SHA
+        id: short-sha
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -41,10 +45,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_PATH }}
           tags: |
             type=ref,event=branch
-            type=sha,prefix={{branch}}-
+            type=sha,prefix=sha-,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
@@ -77,6 +81,6 @@ jobs:
         with:
           app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
           # AZURE_WEBAPP_NAME secret should be the name of your Azure Web App resource
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          # Use the commit SHA as the image tag for precise versioning
+          images: ${{ env.IMAGE_PATH }}:sha-${{ steps.short-sha.outputs.sha_short }}
+          # Use commit SHA for precise versioning and traceability
 
