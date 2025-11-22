@@ -6,6 +6,7 @@ __pycache__/
 .Python
 aigov_env/
 venv/
+*venv/
 env/
 ENV/
 *.egg-info/
