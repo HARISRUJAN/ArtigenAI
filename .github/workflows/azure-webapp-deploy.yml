@@ -13,8 +13,10 @@ on:
 env:
   # GitHub Container Registry
   REGISTRY: ghcr.io
-  # Image name (will be: ghcr.io/OWNER/IMAGE_NAME)
+  # Image name (will be: ghcr.io/OWNER/REPO/IMAGE_NAME)
   IMAGE_NAME: ${{ github.repository }}/aigov-app
+  # Full image path for deployment
+  IMAGE_PATH: ghcr.io/${{ github.repository }}/aigov-app
 
 jobs:
   build-and-deploy:
@@ -41,11 +43,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_PATH }}
           tags: |
             type=ref,event=branch
             type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -77,6 +79,6 @@ jobs:
         with:
           app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
           # AZURE_WEBAPP_NAME secret should be the name of your Azure Web App resource
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          # Use the commit SHA as the image tag for precise versioning
+          images: ${{ env.IMAGE_PATH }}:latest
+          # Use latest tag for deployment (pushed in previous step)
 
