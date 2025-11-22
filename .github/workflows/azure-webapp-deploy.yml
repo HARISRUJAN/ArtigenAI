@@ -29,6 +29,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Generate short SHA
+        id: short-sha
+        run: echo "sha_short=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -46,8 +50,8 @@ jobs:
           images: ${{ env.IMAGE_PATH }}
           tags: |
             type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -79,6 +83,6 @@ jobs:
         with:
           app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
           # AZURE_WEBAPP_NAME secret should be the name of your Azure Web App resource
-          images: ${{ env.IMAGE_PATH }}:latest
-          # Use latest tag for deployment (pushed in previous step)
+          images: ${{ env.IMAGE_PATH }}:sha-${{ steps.short-sha.outputs.sha_short }}
+          # Use commit SHA for precise versioning and traceability
 
