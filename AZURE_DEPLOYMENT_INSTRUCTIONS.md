@@ -67,6 +67,7 @@ DATABASE_URL=<postgresql-url>              # Default: SQLite (in-memory)
 CORS_ORIGINS=https://yourdomain.com       # Comma-separated origins
 ENVIRONMENT=production                     # Set to production
 OPENAI_API_KEY=<your-openai-api-key>      # Optional fallback
+WORKERS=4                                  # Number of Gunicorn workers (default: 4)
 ```
 
 ### Startup Configuration
@@ -78,9 +79,10 @@ bash startup.sh
 
 This script:
 - Changes to the `backend/` directory
+- Checks and installs spaCy language model if needed (one-time, may take 1-2 minutes on first startup)
 - Starts the application using Gunicorn with Uvicorn workers
 - Uses the `PORT` environment variable set by Azure (default: 8000)
-- Installs spaCy language model in the background (for semantic chunking)
+- Uses the `WORKERS` environment variable (default: 4) for number of Gunicorn workers
 
 ## Application Structure
 
@@ -110,6 +112,8 @@ After successful deployment:
 - **Health Check:** `https://artigen.azurewebsites.net/health`
 - **API Docs:** `https://artigen.azurewebsites.net/docs`
 - **Admin Panel:** `https://artigen.azurewebsites.net/admin/login`
+
+⏱️ **Note:** The first startup after deployment may take 2-3 minutes as it downloads the spaCy language model. Subsequent restarts will be faster.
 
 ### Default Admin Credentials
 
